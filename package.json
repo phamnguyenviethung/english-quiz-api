@@ -1,0 +1,43 @@
+{
+  "name": "english-quiz-api",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun --env-file=.env run src/index.ts",
+    "dev": "bun --env-file=.env.local run --watch src/index.ts",
+    "build": "bun build src/index.ts --target bun --outdir dist",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/core/db/migrate.ts",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:seed:ai-models": "bun --env-file=.env.local run src/core/db/seeds/ai-models.seed.ts",
+    "docker:build": "docker build -t english-quiz-api .",
+    "docker:run": "docker run --env-file .env english-quiz-api"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.9",
+    "@types/lodash": "^4.17.23",
+    "dotenv": "^17.2.4",
+    "drizzle-kit": "^0.31.8"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@bull-board/api": "^6.20.3",
+    "@bull-board/elysia": "^6.20.3",
+    "@elysiajs/cors": "^1.4.1",
+    "@elysiajs/openapi": "^1.4.14",
+    "@openrouter/sdk": "^0.12.35",
+    "bullmq": "^5.69.3",
+    "dayjs": "^1.11.19",
+    "drizzle-orm": "^0.45.1",
+    "elysia": "^1.4.25",
+    "ioredis": "^5.9.3",
+    "lodash": "^4.17.23",
+    "pg": "^8.18.0",
+    "winston": "^3.19.0",
+    "zod": "^4.3.6"
+  }
+}
