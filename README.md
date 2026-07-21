@@ -40,20 +40,20 @@ Production: `bun run start` (Docker: `bun run docker:build` + `docker:run`; entr
 
 Nhóm endpoint chính (prefix `/english`):
 
-| Method | Path | Mô tả |
-|---|---|---|
-| GET | `/quiz-types` | Danh sách quiz type |
-| POST | `/generate/:quizType` | Sinh 1 câu hỏi on-demand (vocab, fillblank, phrase, ...) |
-| POST | `/generate-reading` | Sinh câu hỏi reading (loại đặc biệt, ngoài pool) |
-| GET | `/pool/pop` | Lấy 1 câu **random** từ pool theo bucket (không xóa/đánh dấu) |
-| GET | `/pool/count` | Đếm câu trong bucket |
-| POST | `/pool/fill` | Trigger refill pool (enqueue BullMQ) |
-| GET | `/config` | Config snapshot hiện tại |
-| GET | `/config/records` | Danh sách config records (admin) |
-| PATCH | `/config/:recordKey` | Cập nhật 1 config |
-| POST | `/config/:recordKey/reset` | Reset config về default |
-| GET/POST | `/topics` | Danh sách / tạo topic |
-| GET | `/cron/runs`, `/cron/runs/:runId` | Theo dõi các lần generate |
+| Method   | Path                              | Mô tả                                                         |
+| -------- | --------------------------------- | ------------------------------------------------------------- |
+| GET      | `/quiz-types`                     | Danh sách quiz type                                           |
+| POST     | `/generate/:quizType`             | Sinh 1 câu hỏi on-demand (vocab, fillblank, phrase, ...)      |
+| POST     | `/generate-reading`               | Sinh câu hỏi reading (loại đặc biệt, ngoài pool)              |
+| GET      | `/pool/pop`                       | Lấy 1 câu **random** từ pool theo bucket (không xóa/đánh dấu) |
+| GET      | `/pool/count`                     | Đếm câu trong bucket                                          |
+| POST     | `/pool/fill`                      | Trigger refill pool (enqueue BullMQ)                          |
+| GET      | `/config`                         | Config snapshot hiện tại                                      |
+| GET      | `/config/records`                 | Danh sách config records (admin)                              |
+| PATCH    | `/config/:recordKey`              | Cập nhật 1 config                                             |
+| POST     | `/config/:recordKey/reset`        | Reset config về default                                       |
+| GET/POST | `/topics`                         | Danh sách / tạo topic                                         |
+| GET      | `/cron/runs`, `/cron/runs/:runId` | Theo dõi các lần generate                                     |
 
 ## Docs
 

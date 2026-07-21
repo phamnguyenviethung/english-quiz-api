@@ -87,9 +87,7 @@ Cron job pool truyền `topic` = tên topic (`topicName`) khi generate batch.
 
 ```json
 {
-  "questions": [
-    /* mảng đúng `count` phần tử, mỗi phần tử cùng schema một câu */
-  ]
+  "questions": [/* mảng đúng `count` phần tử, mỗi phần tử cùng schema một câu */]
 }
 ```
 

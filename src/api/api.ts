@@ -2,7 +2,10 @@ import { Elysia } from 'elysia';
 import cors from '@elysiajs/cors';
 import openapi from '@elysiajs/openapi';
 import logger from '@/configs/logger.config';
+import { ok } from './common/response';
+import { errorHandler } from './common/errorHandler';
 import { englishRoute } from './routes/english.route';
+import { adminRoute } from './routes/admin.route';
 import { questionGenQueue } from '@/core/cron/question-gen.job';
 import { poolRefillQueue } from '@/core/cron/pool-refill.job';
 
@@ -27,10 +30,12 @@ export async function startApi(): Promise<void> {
   const queueBoardPlugin = await serverAdapter.registerPlugin();
 
   const app = new Elysia()
+    .use(errorHandler)
     .use(cors())
     .use(openapi())
     .use(queueBoardPlugin)
-    .get('/health', () => ({ status: 'ok' }))
+    .get('/health', () => ok({ status: 'ok' }))
+    .use(adminRoute)
     .use(englishRoute);
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3220;

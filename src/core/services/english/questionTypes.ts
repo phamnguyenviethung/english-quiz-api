@@ -1,3 +1,7 @@
+export const ENG_LEVELS = ['A1', 'A2', 'B1', 'B2'] as const;
+
+export type EngLevel = (typeof ENG_LEVELS)[number];
+
 export const QUIZ_TYPES = [
   'vocab',
   'fillblank',

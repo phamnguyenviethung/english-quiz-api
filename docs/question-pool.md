@@ -12,7 +12,7 @@ GET /english/pool/pop?engLevel=A2&topicId=5
      │
   có câu ──────────► trả về (câu vẫn nằm lại pool, có thể pop lại lần sau)
      │
-    null ──────────► 404 "Pool trống cho bucket này"
+    null ──────────► 404 { success:false, error:{ code:"NOT_FOUND", message:"Pool trống cho bucket này" } }
                      (client tự gọi /pool/fill để refill, hoặc chờ scheduled refill)
 ```
 
@@ -91,7 +91,7 @@ CREATE TABLE english_question_pool (
 | Function                                    | Mô tả                                                                        |
 | ------------------------------------------- | ---------------------------------------------------------------------------- |
 | `getPoolCount(engLevel, quizType, topicId)` | Đếm **tổng số câu** trong bucket `(engLevel, topicId, quizType)`             |
-| `popQuestion(engLevel, topicId)`            | `ORDER BY RANDOM() LIMIT 1`; không xóa/đánh dấu; trả `PoolQuestion \| null`   |
+| `popQuestion(engLevel, topicId)`            | `ORDER BY RANDOM() LIMIT 1`; không xóa/đánh dấu; trả `PoolQuestion \| null`  |
 | `pushQuestions(questions[])`                | Insert batch; kiểm tra capacity (tổng câu) theo từng bucket trước khi insert |
 | `clearPool(engLevel?, topicId?)`            | Xóa pool (filter tùy chọn theo engLevel / topicId)                           |
 | `pickQuizType()`                            | Random quiz type theo `quiz_distribution` (weighted)                         |

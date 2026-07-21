@@ -237,3 +237,88 @@ export const aiModel = pgTable('ai_models', {
 
 export type AiModel = typeof aiModel.$inferSelect;
 export type InsertAiModel = typeof aiModel.$inferInsert;
+
+// ----------------------------------------------------------------------------
+// Tenants (multi-tenant auth) — mỗi client (bot/server) là 1 tenant, xác thực
+// bằng API key Bearer, được cấp quyền truy cập resource quiz qua allow-list.
+// Data quiz (topic/pool/config) vẫn global; tenant chỉ giới hạn access, không
+// sở hữu riêng. Không thêm tenantId vào bảng english_*.
+// ----------------------------------------------------------------------------
+
+export const tenant = pgTable('tenants', {
+  id: serial().primaryKey(),
+  name: text().notNull().unique(),
+  description: text(),
+  isActive: boolean().default(true).notNull(),
+  // Capability list, ví dụ ['quiz:read', 'pool:fill']. Dạng string[] để thêm
+  // scope mới không cần đổi schema.
+  scopes: jsonb().$type<string[]>().default([]).notNull(),
+  // Bỏ qua topic/quizType allow-list cho tenant tin cậy (truy cập tất cả).
+  allowAllTopics: boolean().default(false).notNull(),
+  allowAllQuizTypes: boolean().default(false).notNull(),
+  createdAt: timestamp().defaultNow(),
+  updatedAt: timestamp().defaultNow()
+});
+
+export type Tenant = typeof tenant.$inferSelect;
+export type InsertTenant = typeof tenant.$inferInsert;
+
+// API keys của tenant. Key lưu plaintext trong cột `key` (unique) — verify bằng
+// lookup trực tiếp WHERE key = raw. Đơn giản, chưa cần hash.
+export const tenantApiKey = pgTable(
+  'tenant_api_keys',
+  {
+    id: serial().primaryKey(),
+    tenantId: integer()
+      .notNull()
+      .references(() => tenant.id),
+    key: text().notNull().unique(),
+    label: text(),
+    isActive: boolean().default(true).notNull(),
+    lastUsedAt: timestamp(),
+    revokedAt: timestamp(),
+    createdAt: timestamp().defaultNow()
+  },
+  (t) => [index('tenant_api_keys_tenant_id_idx').on(t.tenantId)]
+);
+
+export type TenantApiKey = typeof tenantApiKey.$inferSelect;
+export type InsertTenantApiKey = typeof tenantApiKey.$inferInsert;
+
+// Allow-list topic per-tenant. Không có row nào + allowAllTopics=false → tenant
+// không truy cập topic nào (trừ bucket no-topic).
+export const tenantTopicAccess = pgTable(
+  'tenant_topic_access',
+  {
+    id: serial().primaryKey(),
+    tenantId: integer()
+      .notNull()
+      .references(() => tenant.id),
+    topicId: integer()
+      .notNull()
+      .references(() => englishTopic.id),
+    createdAt: timestamp().defaultNow()
+  },
+  (t) => [uniqueIndex('tenant_topic_access_tenant_topic_unique_idx').on(t.tenantId, t.topicId)]
+);
+
+export type TenantTopicAccess = typeof tenantTopicAccess.$inferSelect;
+export type InsertTenantTopicAccess = typeof tenantTopicAccess.$inferInsert;
+
+// Allow-list quizType per-tenant. quizType là enum trong code (QUIZ_TYPES), nên
+// không FK — validate bằng isQuizType ở service layer.
+export const tenantQuizTypeAccess = pgTable(
+  'tenant_quiz_type_access',
+  {
+    id: serial().primaryKey(),
+    tenantId: integer()
+      .notNull()
+      .references(() => tenant.id),
+    quizType: text().notNull(),
+    createdAt: timestamp().defaultNow()
+  },
+  (t) => [uniqueIndex('tenant_quiz_type_access_tenant_type_unique_idx').on(t.tenantId, t.quizType)]
+);
+
+export type TenantQuizTypeAccess = typeof tenantQuizTypeAccess.$inferSelect;
+export type InsertTenantQuizTypeAccess = typeof tenantQuizTypeAccess.$inferInsert;

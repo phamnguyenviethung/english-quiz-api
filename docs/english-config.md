@@ -48,23 +48,23 @@ Seed các type cơ bản:
 
 ### `english_config_records`
 
-| Column                   | Ý nghĩa                                                              |
-| ------------------------ | -------------------------------------------------------------------- |
-| `recordKey`              | Unique key, ví dụ `question_pool.maxPerBucket`                       |
-| `namespace`              | Runtime snapshot group, ví dụ `question_pool`                        |
-| `path`                   | Field path trong namespace, ví dụ `maxPerBucket` hoặc `items`        |
-| `category`               | Nhóm hiển thị: `pool`, `jobs`                                        |
-| `label`, `description`   | Text hiển thị cho admin                                              |
-| `recordTypeId`           | FK đến `english_config_record_types.id`                              |
-| `valueText`              | Current value cho `str`                                              |
-| `valueNumber`            | Current value cho `num`                                              |
-| `valueBoolean`           | Current value cho `boolean`                                          |
-| `valueJson`              | Current value cho `arr` hoặc `obj`                                   |
-| `defaultText/Number/...` | Default value theo cùng typed column                                 |
-| `validation`             | Metadata validate cơ bản theo type                                   |
-| `uiSchema`               | Metadata render typed UI controls                                    |
-| `sortOrder`              | Thứ tự hiển thị                                                      |
-| `createdAt`, `updatedAt` | Timestamp                                                            |
+| Column                   | Ý nghĩa                                                       |
+| ------------------------ | ------------------------------------------------------------- |
+| `recordKey`              | Unique key, ví dụ `question_pool.maxPerBucket`                |
+| `namespace`              | Runtime snapshot group, ví dụ `question_pool`                 |
+| `path`                   | Field path trong namespace, ví dụ `maxPerBucket` hoặc `items` |
+| `category`               | Nhóm hiển thị: `pool`, `jobs`                                 |
+| `label`, `description`   | Text hiển thị cho admin                                       |
+| `recordTypeId`           | FK đến `english_config_record_types.id`                       |
+| `valueText`              | Current value cho `str`                                       |
+| `valueNumber`            | Current value cho `num`                                       |
+| `valueBoolean`           | Current value cho `boolean`                                   |
+| `valueJson`              | Current value cho `arr` hoặc `obj`                            |
+| `defaultText/Number/...` | Default value theo cùng typed column                          |
+| `validation`             | Metadata validate cơ bản theo type                            |
+| `uiSchema`               | Metadata render typed UI controls                             |
+| `sortOrder`              | Thứ tự hiển thị                                               |
+| `createdAt`, `updatedAt` | Timestamp                                                     |
 
 Không có revision table, `changeNote`, `changedBy`, hoặc `isActive` trong v1 này.
 
@@ -125,9 +125,9 @@ Service này không có UI riêng — config được thao tác qua HTTP API (pr
 - `GET /config` — snapshot runtime hiện tại (đọc từ memory).
 - `GET /config/records` — list toàn bộ config records (kèm value/default/validation/uiSchema) theo category/sort order.
 - `PATCH /config/:recordKey` body `{ value }` — validate rồi update 1 record, refresh snapshot ngay.
-- `POST /config/:recordKey/reset` — ghi default typed value qua cùng validation path.
+- `POST /config/:recordKey:reset` — ghi default typed value qua cùng validation path.
 
-Server-side validation trong service là source of truth. `uiSchema`/`validation` metadata vẫn được trả về để client (nếu có) render typed controls. Chưa có auth layer — nếu thêm sau, các endpoint config nên admin-only.
+Tất cả yêu cầu Bearer tenant key: `config:read` cho GET, `config:write` cho PATCH/reset (xem `docs/tenant-auth.md`). Server-side validation trong service là source of truth. `uiSchema`/`validation` metadata vẫn được trả về để client (nếu có) render typed controls.
 
 ## 7. Quy Tắc Khi Thêm Config Mới
 

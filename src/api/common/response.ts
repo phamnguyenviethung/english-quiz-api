@@ -1,3 +1,5 @@
+import type { ApiErrorCode } from './errorCodes';
+
 export interface ApiSuccess<T> {
   success: true;
   data: T;
@@ -9,17 +11,23 @@ export interface ApiList<T> extends ApiSuccess<T[]> {
 
 export interface ApiError {
   success: false;
-  message: string;
+  error: {
+    code: ApiErrorCode;
+    message: string;
+  };
 }
 
+// Envelope thành công cho một resource.
 export function ok<T>(data: T): ApiSuccess<T> {
   return { success: true, data };
 }
 
-export function list<T>(data: T[]): ApiList<T> {
-  return { success: true, data, total: data.length };
+// Giống ok() nhưng dùng cho resource vừa tạo (handler set status 201 kèm theo).
+export function created<T>(data: T): ApiSuccess<T> {
+  return { success: true, data };
 }
 
-export function notFound(message = 'Không tìm thấy'): Response {
-  return Response.json({ success: false, message } satisfies ApiError, { status: 404 });
+// Envelope thành công cho danh sách; total = số phần tử trả về.
+export function list<T>(data: T[]): ApiList<T> {
+  return { success: true, data, total: data.length };
 }

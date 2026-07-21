@@ -22,6 +22,8 @@ import { buildSynonymPrompt, type SynonymQuestion } from './prompt/synonym-promp
 import { buildVocabPrompt, type DifficultyContext, type VocabQuestion } from './prompt/vocab-prompt';
 import { buildIdiomPrompt, type IdiomQuestion } from './prompt/idiom-prompt';
 import { buildVerbUseMatchPrompt, type VerbUseMatchQuestion } from './prompt/verb-use-match-prompt';
+import { type EngLevel, type QuizType } from './questionTypes';
+import { BusinessLogicException } from '@/core/exceptions';
 
 export type {
   ConversationQuestion,
@@ -1084,6 +1086,61 @@ class StudyService {
     });
     logger.info(`[StudyService] Verb-use-match batch: ${valid.length}/${count} valid`);
     return { questions: valid as VerbUseMatchQuestion[], usage };
+  }
+
+  // ─── Dispatch & Context ────────────────────────────────────────────────────
+
+  /**
+   * Build DifficultyContext cho một lần sinh câu hỏi. Chọn model tự động qua
+   * pickStudyModel nếu không truyền vào; show5050 mặc định true.
+   */
+  async buildContext(input: {
+    engLevel: EngLevel;
+    optionCount: 3 | 4 | 5;
+    topicName?: string | null;
+    model?: string;
+  }): Promise<DifficultyContext> {
+    return {
+      engLevel: input.engLevel,
+      optionCount: input.optionCount,
+      show5050: true,
+      model: input.model ?? (await pickStudyModel(input.engLevel)),
+      topicName: input.topicName ?? null
+    };
+  }
+
+  /**
+   * Dispatch quizType → method sinh câu hỏi (single) tương ứng.
+   * `vocab` dùng generateQuestion; các loại còn lại theo tên generateXQuestion.
+   * `reading` không nằm ở đây — dùng generateReadingQuestion trực tiếp.
+   */
+  async generateByType(quizType: QuizType, ctx: DifficultyContext, excludeWords?: string[]) {
+    switch (quizType) {
+      case 'vocab':
+        return this.generateQuestion(ctx, excludeWords);
+      case 'fillblank':
+        return this.generateFillBlankQuestion(ctx, excludeWords);
+      case 'phrase':
+        return this.generatePhraseQuestion(ctx, excludeWords);
+      case 'conversation':
+        return this.generateConversationQuestion(ctx, excludeWords);
+      case 'description':
+        return this.generateDescriptionQuestion(ctx, excludeWords);
+      case 'synonym':
+        return this.generateSynonymQuestion(ctx, excludeWords);
+      case 'slang':
+        return this.generateSlangQuestion(ctx, excludeWords);
+      case 'odd-one-out':
+        return this.generateOddOneOutQuestion(ctx, excludeWords);
+      case 'paragraph':
+        return this.generateParagraphQuestion(ctx, excludeWords);
+      case 'idiom':
+        return this.generateIdiomQuestion(ctx, excludeWords);
+      case 'verb-use-match':
+        return this.generateVerbUseMatchQuestion(ctx, excludeWords);
+      default:
+        throw new BusinessLogicException(`Unsupported quizType: ${quizType}`);
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 import logger from '@/configs/logger.config';
 import redisClient from '@/configs/redis.config';
+import checkEnv from '@/utils/checkEnv';
 import { ensureEnglishConfigSeeded } from '@/core/services/english/englishConfig.service';
 import startCron, { shutdownCronJobs } from '@/core/cron';
 import { startApi } from '@/api/api';
@@ -19,6 +20,8 @@ process.on('SIGINT', shutdown);
 
 const start = async (): Promise<void> => {
   try {
+    // 0. Validate env bắt buộc (fail fast nếu thiếu ADMIN_API_KEY cho /admin/*)
+    checkEnv(['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY']);
     // 1. Seed + load config snapshot vào memory (mọi service đọc snapshot đồng bộ)
     await ensureEnglishConfigSeeded();
     // 2. Init BullMQ english jobs (question-gen, pool-refill, manual-fill)

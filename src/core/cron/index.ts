@@ -23,10 +23,7 @@ export async function shutdownCronJobs(): Promise<void> {
   logger.info('[Cron] Shutting down all queues and workers...');
 
   // Dynamic imports after init to get the populated module-level vars
-  const [questionGen, poolRefill] = await Promise.all([
-    import('./question-gen.job'),
-    import('./pool-refill.job')
-  ]);
+  const [questionGen, poolRefill] = await Promise.all([import('./question-gen.job'), import('./pool-refill.job')]);
 
   await Promise.allSettled([
     questionGen.questionGenWorker?.close(),
