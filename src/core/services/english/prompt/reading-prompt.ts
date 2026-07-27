@@ -1,15 +1,5 @@
 import type { DifficultyContext } from './vocab-prompt';
 
-export interface ReadingQuestion {
-  distractorTactic: string; // tên tactic được dùng, e.g. "TEMPORAL_SHIFT"
-  context: string; // 4-5 câu EN paragraph, KHÔNG chứa câu hỏi
-  questionSentence: string; // Câu hỏi tính toán cuối cùng
-  correctAnswer: number; // Số nguyên dương, kết quả chính xác của phép tính
-  wrongAnswers: number[]; // EXACTLY optionCount-1 phần tử, số nguyên dương, distinct
-  translation: string; // Dịch toàn bộ (context + questionSentence) sang tiếng Việt
-  explanation: string; // 1 câu VN: chỉ số nào dùng + phép tính dạng "A × B = C"
-}
-
 const VALID_TACTICS = [
   'SUBSET_AMBIGUITY',
   'TEMPORAL_SHIFT',
@@ -23,6 +13,16 @@ const VALID_TACTICS = [
 
 export type DistractorTactic = (typeof VALID_TACTICS)[number];
 export { VALID_TACTICS };
+
+export interface ReadingQuestion {
+  distractorTactic: DistractorTactic; // tên tactic được dùng, e.g. "TEMPORAL_SHIFT"
+  context: string; // 4-5 câu EN paragraph, KHÔNG chứa câu hỏi
+  questionSentence: string; // Câu hỏi tính toán cuối cùng
+  correctAnswer: number; // Số nguyên dương, kết quả chính xác của phép tính
+  wrongAnswers: number[]; // EXACTLY optionCount-1 phần tử, số nguyên dương, distinct
+  translation: string; // Dịch toàn bộ (context + questionSentence) sang tiếng Việt
+  explanation: string; // 1 câu VN: chỉ số nào dùng + phép tính dạng "A × B = C"
+}
 
 export function buildReadingPrompt(
   wrongAnswerCount: number,

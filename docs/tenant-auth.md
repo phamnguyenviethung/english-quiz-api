@@ -69,7 +69,7 @@ Lưu dạng `string[]` trong `tenants.scopes` → thêm scope mới không cần
 | `pool:fill`    | `POST /pool/fill`                                                                                                                                |
 | `topic:write`  | `POST /topics`                                                                                                                                   |
 | `config:read`  | `GET /config`, `/config/records`                                                                                                                 |
-| `config:write` | `PATCH /config/:recordKey`, `POST /config/:recordKey:reset`                                                                                      |
+| `config:write` | `PATCH /config/:recordKey`, `POST /config/:recordKey/reset`                                                                                      |
 | `cron:read`    | `GET /cron/runs`, `/cron/runs/:runId`                                                                                                            |
 
 > `config:*`, `topic:write`, `cron:read` nên chỉ cấp cho tenant trusted/admin. Tenant thường chỉ cần `quiz:read` (+ `pool:fill` nếu tự refill).

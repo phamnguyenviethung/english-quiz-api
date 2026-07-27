@@ -49,7 +49,7 @@ const baseQuizFields = {
   exampleTranslation: z.string()
 };
 
-const VocabQuestionSchema = z.object({
+export const VocabQuestionSchema = z.object({
   word: z.string(),
   partOfSpeech: z.string(),
   correctAnswer: z.string(),
@@ -58,7 +58,7 @@ const VocabQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const PhraseQuestionSchema = z.object({
+export const PhraseQuestionSchema = z.object({
   phrase: z.string(),
   correctAnswer: z.string(),
   wrongAnswers: z.array(z.string()),
@@ -66,7 +66,7 @@ const PhraseQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const FillBlankQuestionSchema = z.object({
+export const FillBlankQuestionSchema = z.object({
   word: z.string(),
   sentence: z.string(),
   sentenceTranslation: z.string(),
@@ -79,7 +79,7 @@ const FillBlankQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const ConversationQuestionSchema = z.object({
+export const ConversationQuestionSchema = z.object({
   dialogueLines: z.array(z.string()),
   sentence: z.string(),
   sentenceTranslation: z.string(),
@@ -92,7 +92,7 @@ const ConversationQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const DescriptionQuestionSchema = z.object({
+export const DescriptionQuestionSchema = z.object({
   description: z.string(),
   descriptionLanguage: z.enum(['vi', 'en']),
   partOfSpeech: z.enum(['noun', 'verb', 'adjective']),
@@ -102,7 +102,7 @@ const DescriptionQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const SynonymQuestionSchema = z.object({
+export const SynonymQuestionSchema = z.object({
   word: z.string(),
   questionType: z.enum(['synonym', 'antonym']),
   partOfSpeech: z.string(),
@@ -112,7 +112,7 @@ const SynonymQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const SlangQuestionSchema = z.object({
+export const SlangQuestionSchema = z.object({
   slang: z.string(),
   partOfSpeech: z.string(),
   correctAnswer: z.string(),
@@ -121,7 +121,7 @@ const SlangQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const OddOneOutQuestionSchema = z.object({
+export const OddOneOutQuestionSchema = z.object({
   oddWord: z.string(),
   groupTheme: z.string(),
   groupWords: z.array(z.string()),
@@ -129,7 +129,7 @@ const OddOneOutQuestionSchema = z.object({
   ...baseQuizFields
 });
 
-const ReadingQuestionSchema = z.object({
+export const ReadingQuestionSchema = z.object({
   distractorTactic: z.enum(VALID_TACTICS),
   context: z.string(),
   questionSentence: z.string(),
@@ -137,6 +137,14 @@ const ReadingQuestionSchema = z.object({
   wrongAnswers: z.array(z.number().int().positive()),
   translation: z.string(),
   explanation: z.string()
+});
+
+// Response shape metadata dùng cho OpenAPI (src/api/common/responseSchemas.ts) — usage
+// field trả về từ generateStructuredOutput, optional khi provider không trả token count.
+export const UsageSchema = z.object({
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  model: z.string()
 });
 
 // ─── Batch Schemas ───────────────────────────────────────────────────────────
@@ -151,7 +159,7 @@ const SlangBatchSchema = z.object({ questions: z.array(SlangQuestionSchema).min(
 const OddOneOutBatchSchema = z.object({ questions: z.array(OddOneOutQuestionSchema).min(1).max(5) });
 const ReadingBatchSchema = z.object({ questions: z.array(ReadingQuestionSchema).min(1).max(5) });
 
-const ParagraphQuestionSchema = z.object({
+export const ParagraphQuestionSchema = z.object({
   paragraph: z.string(),
   correctStatement: z.string(),
   wrongStatements: z.array(z.string()),
@@ -162,7 +170,7 @@ const ParagraphQuestionSchema = z.object({
 
 const ParagraphBatchSchema = z.object({ questions: z.array(ParagraphQuestionSchema).min(1).max(5) });
 
-const IdiomQuestionSchema = z.object({
+export const IdiomQuestionSchema = z.object({
   idiom: z.string(),
   correctAnswer: z.string(),
   wrongAnswers: z.array(z.string()),
@@ -171,7 +179,7 @@ const IdiomQuestionSchema = z.object({
 });
 const IdiomBatchSchema = z.object({ questions: z.array(IdiomQuestionSchema).min(1).max(5) });
 
-const VerbUseMatchQuestionSchema = z.object({
+export const VerbUseMatchQuestionSchema = z.object({
   format: z.enum(['fill-blank', 'phrase-choice']),
   targetPhrase: z.string(),
   verb: z.string(),

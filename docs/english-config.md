@@ -125,7 +125,7 @@ Service này không có UI riêng — config được thao tác qua HTTP API (pr
 - `GET /config` — snapshot runtime hiện tại (đọc từ memory).
 - `GET /config/records` — list toàn bộ config records (kèm value/default/validation/uiSchema) theo category/sort order.
 - `PATCH /config/:recordKey` body `{ value }` — validate rồi update 1 record, refresh snapshot ngay.
-- `POST /config/:recordKey:reset` — ghi default typed value qua cùng validation path.
+- `POST /config/:recordKey/reset` — ghi default typed value qua cùng validation path.
 
 Tất cả yêu cầu Bearer tenant key: `config:read` cho GET, `config:write` cho PATCH/reset (xem `docs/tenant-auth.md`). Server-side validation trong service là source of truth. `uiSchema`/`validation` metadata vẫn được trả về để client (nếu có) render typed controls.
 

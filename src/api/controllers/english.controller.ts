@@ -2,7 +2,20 @@ import logger from '@/configs/logger.config';
 import { NotFoundException } from '@/core/exceptions';
 import { assertTopicAllowed, assertQuizTypeAllowed } from '@/api/plugins/tenantAuth.plugin';
 import type { TenantContext } from '@/core/services/tenant/tenant.service';
-import studyService from '@/core/services/english/study.service';
+import studyService, {
+  type VocabQuestion,
+  type PhraseQuestion,
+  type FillBlankQuestion,
+  type ConversationQuestion,
+  type DescriptionQuestion,
+  type SynonymQuestion,
+  type SlangQuestion,
+  type OddOneOutQuestion,
+  type ParagraphQuestion,
+  type IdiomQuestion,
+  type VerbUseMatchQuestion,
+  type StructuredOutputUsage
+} from '@/core/services/english/study.service';
 import questionPoolService, { pickQuizType } from '@/core/services/english/questionPool.service';
 import questionPoolTriggerService from '@/core/services/english/questionPoolTrigger.service';
 import topicService from '@/core/services/english/topic.service';
@@ -25,7 +38,27 @@ interface GenerateInput {
   excludeWords?: string[];
 }
 
-async function generate(tenant: TenantContext, quizType: QuizType, input: GenerateInput) {
+// generateByType() switch-narrows quizType↔question nội bộ nhưng type đó không thoát ra
+// ngoài function boundary (return type của nó chỉ là union rời của các { question }, còn
+// quizType param ở đây vẫn giữ nguyên full QuizType union) — nên `{ quizType, ...result }`
+// không tự nhiên khớp discriminated union theo quizType. Cast sang GenerateResult để
+// OpenAPI response schema (GenerateQuestionResponseSchema) có thể model chính xác theo
+// từng loại — không đổi giá trị trả về lúc runtime, chỉ khai báo type đúng với thực tế
+// (generateByType luôn trả question đúng shape của quizType được truyền vào).
+type GenerateResult =
+  | { quizType: 'vocab'; question: VocabQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'phrase'; question: PhraseQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'fillblank'; question: FillBlankQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'conversation'; question: ConversationQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'description'; question: DescriptionQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'synonym'; question: SynonymQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'slang'; question: SlangQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'odd-one-out'; question: OddOneOutQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'paragraph'; question: ParagraphQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'idiom'; question: IdiomQuestion; usage?: StructuredOutputUsage }
+  | { quizType: 'verb-use-match'; question: VerbUseMatchQuestion; usage?: StructuredOutputUsage };
+
+async function generate(tenant: TenantContext, quizType: QuizType, input: GenerateInput): Promise<GenerateResult> {
   assertQuizTypeAllowed(tenant, quizType);
   const ctx = await studyService.buildContext({
     engLevel: input.engLevel,
@@ -35,7 +68,7 @@ async function generate(tenant: TenantContext, quizType: QuizType, input: Genera
   });
   logger.info(`[API] Generate ${quizType} engLevel=${ctx.engLevel} optionCount=${ctx.optionCount}`);
   const result = await studyService.generateByType(quizType, ctx, input.excludeWords);
-  return { quizType, ...result };
+  return { quizType, ...result } as GenerateResult;
 }
 
 interface GenerateReadingInput {
