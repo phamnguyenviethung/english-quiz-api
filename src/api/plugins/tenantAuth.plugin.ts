@@ -2,6 +2,28 @@ import { Elysia } from 'elysia';
 import apiKeyService from '@/core/services/tenant/apiKey.service';
 import type { TenantContext } from '@/core/services/tenant/tenant.service';
 import { ForbiddenException, UnauthorizedException } from '@/core/exceptions';
+import { extractAdminKey, isAdminKey } from '@/api/common/adminKey';
+import { SCOPES } from '@/api/common/scopes';
+
+/**
+ * Context ảo cho request dùng ADMIN_API_KEY: đủ mọi scope, bỏ qua allow-list
+ * topic/quizType. Nhờ vậy admin key dùng được ở cả /admin/* lẫn /english/* mà
+ * không cần cấp tenant key riêng cho dashboard.
+ *
+ * `Object.values(SCOPES)` để scope thêm sau này tự động có hiệu lực. id = 0 an
+ * toàn vì tenantId không xuống tới tầng data (data quiz là global, xem comment
+ * ở src/core/db/schema/main.ts). Constant này không được mutate ở đâu.
+ */
+const ADMIN_TENANT: TenantContext = {
+  id: 0,
+  name: '__admin__',
+  scopes: Object.values(SCOPES),
+  allowAllTopics: true,
+  allowedTopicIds: [],
+  allowAllQuizTypes: true,
+  allowedQuizTypes: [],
+  isAdmin: true
+};
 
 // Đọc raw Bearer token từ header Authorization.
 function extractBearer(authorization: string | undefined): string | null {
@@ -27,12 +49,18 @@ function assertScopes(tenant: TenantContext, required: string | string[] | undef
  *
  * - `.resolve` inject `tenant: TenantContext` vào mọi request dùng plugin này.
  * - macro `auth` nhận `{ scope }` để guard theo capability trên từng route.
+ * - ADMIN_API_KEY được chấp nhận như super key → ADMIN_TENANT (full quyền).
  *
  * Dùng: `.use(tenantAuthPlugin)` ở đầu route module, rồi khai báo
  * `{ auth: { scope: 'quiz:read' } }` cho từng route.
  */
 export const tenantAuthPlugin = new Elysia({ name: 'tenant-auth' })
   .resolve(async ({ headers }) => {
+    // Check admin key trước: string compare rẻ hơn nhiều so với 3 round-trip DB
+    // của verifyKey + getTenantContext. Không khớp thì rơi xuống nhánh tenant.
+    const adminRaw = extractAdminKey(headers as Record<string, string | undefined>);
+    if (isAdminKey(adminRaw)) return { tenant: ADMIN_TENANT };
+
     const raw = extractBearer(headers.authorization);
     if (!raw) throw new UnauthorizedException('Thiếu Bearer API key');
 

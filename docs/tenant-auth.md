@@ -15,30 +15,47 @@ Data quiz (topic/pool/config) vẫn **global dùng chung** — không có cột 
 ```
 Client ──Authorization: Bearer eqk_<random>──► /english/*
    │
-   ├─ tenantAuth.resolve: lookup key (plaintext) WHERE key = raw AND isActive
-   │                      → check tenant active → inject ctx.tenant
-   │
-   ├─ macro auth: { scope } → check ctx.tenant.scopes chứa scope? else 403
-   │
-   └─ handler: assertTopicAllowed / assertQuizTypeAllowed → 403 nếu ngoài allow-list
+   ├─ tenantAuth.resolve:
+   │     ├─ key khớp ADMIN_API_KEY? → ADMIN_TENANT (full quyền, 0 query DB) ──┐
+   │     └─ else: lookup key (plaintext) WHERE key = raw AND isActive          │
+   │              → check tenant active → inject ctx.tenant                    │
+   │                                                                           │
+   ├─ macro auth: { scope } → check ctx.tenant.scopes chứa scope? else 403 ◄───┤
+   │                                                                           │
+   └─ handler: assertTopicAllowed / assertQuizTypeAllowed → 403 nếu ngoài ◄────┘
+                                                            allow-list
 ```
 
-Admin API (`/admin/*`) dùng cơ chế riêng: header so với `ADMIN_API_KEY` trong env.
+### Admin key là super key
+
+`ADMIN_API_KEY` dùng được ở **mọi** endpoint, không riêng `/admin/*`. Khi request mang admin key, `tenantAuthPlugin` trả về `ADMIN_TENANT` — một `TenantContext` **ảo** (`src/api/plugins/tenantAuth.plugin.ts`) có đủ mọi scope trong `SCOPES` + `allowAllTopics` + `allowAllQuizTypes`, nên pass hết guard phía sau mà không cần query DB.
+
+| Key gửi lên                                 | `/admin/*` | `/english/*`                        |
+| ------------------------------------------- | ---------- | ----------------------------------- |
+| `ADMIN_API_KEY` (Bearer hoặc `x-admin-key`) | ✅ full    | ✅ full — bỏ qua scope & allow-list |
+| Tenant key `eqk_...` (Bearer)               | ❌ 401     | ✅ theo scope + allow-list          |
+| Không có / sai                              | ❌ 401     | ❌ 401                              |
+
+Mục đích: dashboard quản trị chỉ cần cầm **1 secret** cho cả hai phía. Discord bot vẫn dùng tenant key giới hạn như cũ.
+
+Lưu ý khi đọc code: `ADMIN_TENANT.id = 0` và `name = '__admin__'` **không ứng với row nào** trong bảng `tenants`. An toàn vì `tenantId` không xuống tới tầng data (data quiz là global). Phân biệt bằng cờ `TenantContext.isAdmin === true`.
 
 ## 2. File Chính
 
-| File                                         | Vai trò                                                                             |
-| -------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `src/core/db/schema/main.ts`                 | Bảng `tenants`, `tenant_api_keys`, `tenant_topic_access`, `tenant_quiz_type_access` |
-| `src/core/services/tenant/tenant.service.ts` | CRUD tenant, set allow-list, build `TenantContext`                                  |
-| `src/core/services/tenant/apiKey.service.ts` | Generate/verify API key (plaintext lookup), issue/list/revoke                       |
-| `src/api/plugins/tenantAuth.plugin.ts`       | Resolve tenant + macro `auth` + `assertTopicAllowed`/`assertQuizTypeAllowed`        |
-| `src/api/plugins/adminAuth.plugin.ts`        | Guard `/admin/*` bằng `ADMIN_API_KEY`                                               |
-| `src/api/routes/admin.route.ts`              | Endpoint quản trị tenant/key/grant                                                  |
-| `src/api/routes/english.route.ts`            | Áp scope + allow-list check cho từng route                                          |
-| `src/api/common/errorHandler.ts`             | Map exception → HTTP status (401/403/404/400/409/500)                               |
-| `src/core/exceptions/index.ts`               | `HttpException` + Unauthorized/Forbidden/NotFound/Conflict/BusinessLogic            |
-| `src/core/db/seeds/tenant.seed.ts`           | Tạo tenant demo + API key để test (`bun run db:seed:tenant`)                        |
+| File                                         | Vai trò                                                                                         |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `src/core/db/schema/main.ts`                 | Bảng `tenants`, `tenant_api_keys`, `tenant_topic_access`, `tenant_quiz_type_access`             |
+| `src/core/services/tenant/tenant.service.ts` | CRUD tenant, set allow-list, build `TenantContext`                                              |
+| `src/core/services/tenant/apiKey.service.ts` | Generate/verify API key (plaintext lookup), issue/list/revoke                                   |
+| `src/api/plugins/tenantAuth.plugin.ts`       | Resolve tenant (+ `ADMIN_TENANT`) + macro `auth` + `assertTopicAllowed`/`assertQuizTypeAllowed` |
+| `src/api/plugins/adminAuth.plugin.ts`        | Guard `/admin/*` bằng `ADMIN_API_KEY`                                                           |
+| `src/api/common/adminKey.ts`                 | Đọc + so khớp `ADMIN_API_KEY` (dùng chung 2 plugin trên)                                        |
+| `src/api/common/scopes.ts`                   | Danh mục `SCOPES` — nguồn scope cho route và cho `ADMIN_TENANT`                                 |
+| `src/api/routes/admin.route.ts`              | Endpoint quản trị tenant/key/grant                                                              |
+| `src/api/routes/english.route.ts`            | Áp scope + allow-list check cho từng route                                                      |
+| `src/api/common/errorHandler.ts`             | Map exception → HTTP status (401/403/404/400/409/500)                                           |
+| `src/core/exceptions/index.ts`               | `HttpException` + Unauthorized/Forbidden/NotFound/Conflict/BusinessLogic                        |
+| `src/core/db/seeds/tenant.seed.ts`           | Tạo tenant demo + API key để test (`bun run db:seed:tenant`)                                    |
 
 ## 3. DB Schema
 
@@ -73,10 +90,13 @@ Lưu dạng `string[]` trong `tenants.scopes` → thêm scope mới không cần
 | `cron:read`    | `GET /cron/runs`, `/cron/runs/:runId`                                                                                                            |
 
 > `config:*`, `topic:write`, `cron:read` nên chỉ cấp cho tenant trusted/admin. Tenant thường chỉ cần `quiz:read` (+ `pool:fill` nếu tự refill).
+>
+> `ADMIN_API_KEY` luôn pass mọi scope trong bảng — `ADMIN_TENANT.scopes` build từ `Object.values(SCOPES)` nên scope thêm sau này tự động có hiệu lực, không cần sửa gì.
 
 ## 6. Enforcement
 
 - **Mọi `/english/*` yêu cầu Bearer API key hợp lệ** (`tenantAuthPlugin`). Thiếu/sai key → **401**. Thiếu scope → **403**. Topic/quizType ngoài allow-list → **403**.
+- `ADMIN_API_KEY` được check **trước** tenant lookup (string compare rẻ hơn 3 round-trip DB) và bỏ qua toàn bộ check scope/allow-list. Key không khớp thì rơi xuống nhánh tenant bình thường.
 - `/health` mở (không auth). `/queues` (bull-board) hiện để mở — có thể bọc `adminAuthPlugin` ở phase sau.
 - `topicId = null` (bucket no-topic) luôn được phép truy cập.
 
@@ -97,7 +117,7 @@ Mọi response dùng envelope thống nhất (`src/api/common/response.ts`):
 
 ## 7. Admin API (`/admin/*`)
 
-Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer <ADMIN_API_KEY>`).
+Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer <ADMIN_API_KEY>`). Cùng key này dùng luôn được cho `/english/*` — xem [Admin key là super key](#admin-key-là-super-key).
 
 | Method & Path                              | Mô tả                                                                                       |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -113,7 +133,9 @@ Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer 
 
 ## 8. Env & Boot
 
-- `ADMIN_API_KEY` (bắt buộc) — secret bảo vệ `/admin/*`. `src/index.ts` gọi `checkEnv(['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY'])` → fail fast nếu thiếu.
+- `ADMIN_API_KEY` (bắt buộc) — secret bảo vệ `/admin/*` **và** là super key cho `/english/*`. `src/index.ts` gọi `checkEnv(['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY'])` → fail fast nếu thiếu.
+
+> Vì key này giờ mở được toàn bộ API (kể cả các endpoint tốn LLM token), dùng chuỗi random đủ dài ở môi trường thật — đừng để giá trị placeholder như trong `.env.example`.
 
 ## 9. Setup & Test nhanh
 
@@ -129,6 +151,13 @@ curl localhost:3399/health                                          # 200 (mở)
 curl localhost:3399/english/quiz-types                              # 401 (thiếu key)
 curl -H "Authorization: Bearer <KEY>" localhost:3399/english/quiz-types   # 200
 curl -H "x-admin-key: <ADMIN>" localhost:3399/admin/tenants         # 200
+
+# Admin key làm super key trên /english/* (cả 2 header đều được)
+curl -H "x-admin-key: <ADMIN>" localhost:3399/english/quiz-types            # 200
+curl -H "Authorization: Bearer <ADMIN>" localhost:3399/english/topics       # 200
+
+# Tenant key KHÔNG leo thang lên admin
+curl -H "Authorization: Bearer <KEY>" localhost:3399/admin/tenants  # 401
 ```
 
 ## 10. Out of scope (phase sau)

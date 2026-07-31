@@ -22,6 +22,8 @@ import englishController from '@/api/controllers/english.controller';
 
 // Mọi route /english/* yêu cầu xác thực tenant qua Bearer API key (tenantAuthPlugin).
 // Scope khai báo bằng `{ auth: { scope } }`. Handler chỉ wire schema + gọi controller.
+// ADMIN_API_KEY dùng được ở đây như super key: pass mọi scope và bỏ qua allow-list
+// topic/quizType — xem ADMIN_TENANT trong tenantAuth.plugin.ts.
 export const englishRoute = new Elysia({ prefix: '/english' })
   .use(tenantAuthPlugin)
 

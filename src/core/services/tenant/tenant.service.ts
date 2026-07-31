@@ -21,6 +21,8 @@ export interface TenantContext {
   allowedTopicIds: number[];
   allowAllQuizTypes: boolean;
   allowedQuizTypes: string[];
+  // true khi request dùng ADMIN_API_KEY (context ảo, không ứng với tenant row nào).
+  isAdmin?: boolean;
 }
 
 interface CreateTenantInput {

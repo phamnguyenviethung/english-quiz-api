@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Throw exception có message rõ ràng (`BusinessLogicException` ở `src/core/exceptions/`)
 - Dùng logger hợp lý cho các logic quan trọng
 - Dùng transaction (`db.transaction`) cho mọi thao tác create/update/delete
-- Comment chỉ cho đoạn code quan trọng, khó hiểu
+- Comment chỉ cho đoạn code quan trọng, khó hiểu. Hạn chế dùng mọi nơi
 - Import dùng alias `@/*` → `src/*`
 
 ## Docs
