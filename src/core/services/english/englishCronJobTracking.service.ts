@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, lte, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, lte, max, ne } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import {
@@ -131,6 +131,28 @@ async function safeWrite<T>(label: string, fallback: T, fn: () => Promise<T>): P
     const normalized = normalizeError(err);
     logger.warn(`[EnglishCronTracking] ${label} failed: ${normalized.message}`);
     return fallback;
+  }
+}
+
+/**
+ * MAX(finishedAt) mỗi bucketKey đã fill thành công — dùng làm tie-break "least
+ * recently topped up" khi refill bị budget-cap, tránh cùng 1 nhóm bucket bị đói
+ * mãi mãi (xem poolRefill.service.ts scanBuckets). Không cần cột/bảng mới, tận
+ * dụng bucketKey đã có trên english_cron_job_buckets.
+ */
+async function getLastBucketRefillTimestamps(bucketKeys: string[]): Promise<Map<string, Date>> {
+  if (bucketKeys.length === 0) return new Map();
+  try {
+    const rows = await db
+      .select({ bucketKey: englishCronJobBucket.bucketKey, lastRefillAt: max(englishCronJobBucket.finishedAt) })
+      .from(englishCronJobBucket)
+      .where(and(inArray(englishCronJobBucket.bucketKey, bucketKeys), eq(englishCronJobBucket.status, 'success')))
+      .groupBy(englishCronJobBucket.bucketKey);
+    return new Map(rows.filter((row) => row.lastRefillAt !== null).map((row) => [row.bucketKey, row.lastRefillAt!]));
+  } catch (err) {
+    const normalized = normalizeError(err);
+    logger.warn(`[EnglishCronTracking] getLastBucketRefillTimestamps failed: ${normalized.message}`);
+    return new Map();
   }
 }
 
@@ -698,6 +720,7 @@ export default {
   startBucket,
   finishBucket,
   recordModelAttempt,
+  getLastBucketRefillTimestamps,
   listRuns,
   getRunDetail,
   getRecentRuns,

@@ -203,4 +203,36 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
         ...COMMON_ERRORS
       }
     }
-  );
+  )
+
+  // ── Pool ─────────────────────────────────────────────────────────────────────
+  .post('/pool/refill', async ({ body }) => ok(await adminController.triggerManualPoolRefill(body)), {
+    body: t.Object({
+      model: t.Optional(t.String({ description: 'OpenRouter model id, mặc định model rẻ nhất (Gemini Flash Lite).' })),
+      countPerBucket: t.Optional(
+        t.Integer({
+          minimum: 1,
+          description: 'Số câu ép sinh cho mỗi bucket. Mặc định question_pool.manualFillDefaultCount.'
+        })
+      ),
+      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')]))
+    }),
+    detail: {
+      tags: ['Admin / Pool'],
+      summary: 'Trigger full manual pool refill',
+      description:
+        'Fill toàn bộ bucket (engLevel × topic × quizType) bất kể pool đã đầy hay chưa (`scope=all`, mặc định — ' +
+        'ép đúng `countPerBucket` câu mỗi bucket) hoặc chỉ bucket thiếu (`scope=deficient` — top-up phần còn ' +
+        'thiếu tới `question_pool.maxPerBucket`, hoặc đúng `countPerBucket` nếu truyền). Chạy in-process ' +
+        '(không qua BullMQ), bounded concurrency theo `question_pool.manualFillConcurrency`. Bỏ qua ' +
+        '`job_flags.poolRefillMaxQuestionsPerRun` — đây là hành động admin chủ động, không bị budget tự động ' +
+        'giới hạn. Trả ngay `{ runId, totalBuckets }`, theo dõi tiến độ qua GET /english/cron/runs/:runId ' +
+        `(admin key cũng gọi được route đó). ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Object({ runId: t.Nullable(t.String()), totalBuckets: t.Number() })),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  });

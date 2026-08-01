@@ -1,10 +1,10 @@
-import logger from '@/configs/logger.config';
-import questionPoolService, { getRefillThreshold, getMaxPoolSize } from './questionPool.service';
-import { getQuestionGenQueue } from '@/core/cron/question-gen.job';
-import { getEnglishConfigSnapshot } from './englishConfig.service';
+import poolRefillService from './poolRefill.service';
 import type { DifficultyContext } from './study.service';
 import type { QuizType } from './questionTypes';
 
+// Thin wrapper — giữ tên public ổn định cho english.controller.ts. Logic thật
+// nằm ở poolRefill.service.ts (runOnDemandRefill), dùng chung engine với
+// scheduled/manual refill.
 async function ensurePoolFilled(
   engLevel: DifficultyContext['engLevel'],
   topicId: number | null,
@@ -12,34 +12,7 @@ async function ensurePoolFilled(
   quizType: QuizType,
   optionCount: 4 | 5
 ): Promise<void> {
-  try {
-    if (!getEnglishConfigSnapshot().job_flags.questionGenEnabled) {
-      logger.info('[QuestionPoolTrigger] Question-gen disabled, skip refill enqueue');
-      return;
-    }
-
-    const currentCount = await questionPoolService.getPoolCount(engLevel, quizType, topicId);
-    const threshold = getRefillThreshold();
-
-    if (currentCount >= threshold) return;
-
-    const needed = getMaxPoolSize() - currentCount;
-
-    logger.info(
-      `[QuestionPoolTrigger] Pool low (${currentCount}/${threshold}) for engLevel=${engLevel} topicId=${topicId} quizType=${quizType}, adding refill job count=${needed}`
-    );
-
-    const jobId = `refill_${engLevel}_${topicId ?? 'null'}_${quizType}`;
-    await getQuestionGenQueue().add(
-      jobId,
-      { engLevel, quizType, optionCount, topicId, topicName, count: needed },
-      { jobId }
-    );
-  } catch (err) {
-    logger.warn(
-      `[QuestionPoolTrigger] Failed to trigger refill for engLevel=${engLevel} topicId=${topicId} quizType=${quizType}: ${err}`
-    );
-  }
+  await poolRefillService.runOnDemandRefill({ engLevel, topicId, topicName, quizType, optionCount });
 }
 
 export default {

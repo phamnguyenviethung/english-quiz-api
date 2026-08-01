@@ -1,38 +1,16 @@
 import { FlowProducer, Queue, Worker } from 'bullmq';
 import { bullmqConnection, TIMEZONE } from './cron.config';
 import { fillBucketDetailed, type QuestionGenJobData } from './question-gen.job';
-import questionPoolService, { getMaxPoolSize } from '@/core/services/english/questionPool.service';
-import type { QuizType } from '@/core/services/english/questionTypes';
-import topicService from '@/core/services/english/topic.service';
+import poolRefillService, {
+  POOL_REFILL_PARENT_QUEUE,
+  POOL_REFILL_CHILD_QUEUE
+} from '@/core/services/english/poolRefill.service';
 import logger from '@/configs/logger.config';
-import { pickStudyModel, type DifficultyContext } from '@/core/services/english/study.service';
-import { getEnglishConfigSnapshot } from '@/core/services/english/englishConfig.service';
-import englishCronJobTrackingService, {
-  normalizeError,
-  type EnglishCronRunRef
-} from '@/core/services/english/englishCronJobTracking.service';
+import { pickStudyModel } from '@/core/services/english/study.service';
+import { getEnglishConfigSnapshot, onEnglishConfigChanged } from '@/core/services/english/englishConfig.service';
+import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
 
-const PARENT_QUEUE = 'english-pool-refill';
-const CHILD_QUEUE = 'english-pool-refill-child';
 const LOG_TAG = 'PoolRefill';
-
-const ENG_LEVELS: DifficultyContext['engLevel'][] = ['A1', 'A2', 'B1', 'B2'];
-
-function getOptionCount(engLevel: DifficultyContext['engLevel']): 4 | 5 {
-  return engLevel === 'A1' || engLevel === 'A2' ? 4 : 5;
-}
-
-function getEnabledQuizTypes(): QuizType[] {
-  return getEnglishConfigSnapshot()
-    .quiz_distribution.filter((item) => item.enabled && item.weight > 0)
-    .map((item) => item.quizType as QuizType);
-}
-
-const SCHEDULES = [
-  { name: 'pool-refill-morning', cron: '0 5 * * *' },
-  { name: 'pool-refill-noon', cron: '0 12 * * *' },
-  { name: 'pool-refill-evening', cron: '0 20 * * *' }
-] as const;
 
 export let poolRefillQueue: Queue;
 export let poolRefillChildQueue: Queue;
@@ -40,103 +18,38 @@ export let poolRefillParentWorker: Worker;
 export let poolRefillChildWorker: Worker<QuestionGenJobData>;
 export let poolRefillFlowProducer: FlowProducer;
 
-interface ScanResult {
-  totalBuckets: number;
-  deficientBuckets: number;
-}
+/**
+ * Đồng bộ BullMQ job schedulers với config `pool_refill_schedule.items` hiện tại:
+ * xoá scheduler không còn trong config, upsert phần còn lại. upsertJobScheduler tự
+ * diff pattern nội bộ nên an toàn gọi lại cho entry không đổi. Gọi lúc boot và mỗi
+ * khi config đổi (xem onEnglishConfigChanged bên dưới) — không cần restart process.
+ */
+export async function reconcilePoolRefillSchedulers(): Promise<void> {
+  const desired = getEnglishConfigSnapshot().pool_refill_schedule;
+  const desiredByName = new Map(desired.map((s) => [s.name, s.cron]));
 
-async function scanAndCreateFlow(
-  flowProducer: FlowProducer,
-  trackingRun: EnglishCronRunRef | null
-): Promise<ScanResult> {
-  const topics = await topicService.getAllActiveTopics();
-  const topicEntries = topics.map((t) => ({ id: t.id, name: t.name }));
-  const maxPool = getMaxPoolSize();
-  const maxPerRun = getEnglishConfigSnapshot().job_flags.poolRefillMaxQuestionsPerRun;
-  const quizTypes = getEnabledQuizTypes();
-  const children: Array<{
-    name: string;
-    queueName: string;
-    data: QuestionGenJobData;
-    opts: Record<string, unknown>;
-  }> = [];
-  let totalBuckets = 0;
-  let plannedQuestions = 0;
-  let cappedByLimit = false;
-  for (const topic of topicEntries) {
-    for (const engLevel of ENG_LEVELS) {
-      for (const quizType of quizTypes) {
-        totalBuckets++;
-        if (plannedQuestions >= maxPerRun) {
-          cappedByLimit = true;
-          continue;
-        }
-        const currentCount = await questionPoolService.getPoolCount(engLevel, quizType, topic.id);
-        if (currentCount >= maxPool) continue;
-        let needed = Math.min(maxPool - currentCount, 5);
-        if (plannedQuestions + needed > maxPerRun) {
-          needed = maxPerRun - plannedQuestions;
-          cappedByLimit = true;
-        }
-        if (needed <= 0) continue;
-        plannedQuestions += needed;
-        children.push({
-          name: `fill-${engLevel}-${topic.id ?? 'null'}-${quizType}`,
-          queueName: CHILD_QUEUE,
-          data: {
-            engLevel,
-            quizType,
-            optionCount: getOptionCount(engLevel),
-            topicId: topic.id,
-            topicName: topic.name,
-            count: needed,
-            trackingRunId: trackingRun?.runId
-          },
-          opts: {
-            removeOnComplete: true,
-            removeOnFail: 50
-          }
-        });
-      }
+  const existing = await poolRefillQueue.getJobSchedulers();
+  for (const scheduler of existing) {
+    if (!desiredByName.has(scheduler.key)) {
+      await poolRefillQueue.removeJobScheduler(scheduler.key);
+      logger.info(`[${LOG_TAG}] Removed stale scheduler: ${scheduler.key}`);
     }
   }
-  if (cappedByLimit) {
-    logger.info(
-      `[${LOG_TAG}] Reached max questions per run (${maxPerRun}), stopping child creation at ${children.length} buckets / ${plannedQuestions} questions`
+
+  for (const [name, cron] of desiredByName) {
+    await poolRefillQueue.upsertJobScheduler(
+      name,
+      { pattern: cron, tz: TIMEZONE },
+      { opts: { removeOnComplete: true, removeOnFail: true } }
     );
   }
-  if (children.length === 0) {
-    logger.info(`[${LOG_TAG}] All ${totalBuckets} buckets are full, nothing to refill`);
-    await englishCronJobTrackingService.finishRun(trackingRun, {
-      status: 'skipped',
-      totals: {
-        totalBuckets,
-        deficientBuckets: 0
-      }
-    });
-    return { totalBuckets, deficientBuckets: 0 };
-  }
-  logger.info(`[${LOG_TAG}] Found ${children.length}/${totalBuckets} deficient buckets, creating flow`);
-  await englishCronJobTrackingService.updateRun(trackingRun, {
-    totalBuckets,
-    deficientBuckets: children.length
-  });
-  await flowProducer.add({
-    name: 'pool-refill-scan',
-    queueName: PARENT_QUEUE,
-    data: { totalBuckets, deficientBuckets: children.length, trackingRunId: trackingRun?.runId },
-    opts: {
-      removeOnComplete: true,
-      removeOnFail: 10
-    },
-    children
-  });
-  return { totalBuckets, deficientBuckets: children.length };
+
+  logger.info(`[${LOG_TAG}] Reconciled schedulers: ${[...desiredByName.keys()].join(', ') || '(none)'}`);
 }
 
 function createChildWorker(): Worker<QuestionGenJobData> {
   return new Worker<QuestionGenJobData>(
-    CHILD_QUEUE,
+    POOL_REFILL_CHILD_QUEUE,
     async (job) => {
       const { engLevel, quizType, topicId, topicName, optionCount, count } = job.data;
       const trackingRun = await englishCronJobTrackingService.getRunRefByRunId(job.data.trackingRunId);
@@ -156,7 +69,7 @@ function createChildWorker(): Worker<QuestionGenJobData> {
         trackingRun,
         trackingMetadata: {
           source: 'pool_refill_child',
-          queueName: CHILD_QUEUE,
+          queueName: POOL_REFILL_CHILD_QUEUE,
           bullJobId: String(job.id ?? ''),
           attempt: job.attemptsMade + 1,
           model
@@ -173,7 +86,7 @@ function createChildWorker(): Worker<QuestionGenJobData> {
 
 function createParentWorker(flowProducer: FlowProducer): Worker {
   return new Worker(
-    PARENT_QUEUE,
+    POOL_REFILL_PARENT_QUEUE,
     async (job) => {
       if (job.name.startsWith('pool-refill-scan')) {
         const run = await englishCronJobTrackingService.getRunRefByRunId(
@@ -189,34 +102,11 @@ function createParentWorker(flowProducer: FlowProducer): Worker {
         return;
       }
       logger.info(`[${LOG_TAG}] Scheduled trigger: ${job.name}, starting scan...`);
-      const run = await englishCronJobTrackingService.startRun({
-        jobKey: 'pool_refill',
-        trigger: 'schedule',
-        queueName: PARENT_QUEUE,
+      const result = await poolRefillService.runScheduledRefill(flowProducer, {
         bullJobId: String(job.id ?? ''),
-        bullJobName: job.name,
-        metadata: {
-          schedule: job.name,
-          cron: SCHEDULES.find((s) => s.name === job.name)?.cron
-        }
+        bullJobName: job.name
       });
-      try {
-        const result = await scanAndCreateFlow(flowProducer, run);
-        logger.info(
-          `[${LOG_TAG}] Scan finished: ${result.deficientBuckets}/${result.totalBuckets} buckets need refill`
-        );
-      } catch (err) {
-        const normalized = normalizeError(err);
-        await englishCronJobTrackingService.finishRun(run, {
-          status: 'failed',
-          errorPhase: 'scan_topics',
-          error: err
-        });
-        logger.error(
-          `[${LOG_TAG}] Scan failed runId=${run?.runId ?? '-'} job=${job.name} phase=scan_topics: ${normalized.message}`
-        );
-        throw err;
-      }
+      logger.info(`[${LOG_TAG}] Scan finished: ${result.deficientBuckets}/${result.totalBuckets} buckets need refill`);
     },
     {
       connection: bullmqConnection,
@@ -226,7 +116,7 @@ function createParentWorker(flowProducer: FlowProducer): Worker {
 }
 
 export default async function poolRefillJob(): Promise<void> {
-  poolRefillQueue = new Queue(PARENT_QUEUE, {
+  poolRefillQueue = new Queue(POOL_REFILL_PARENT_QUEUE, {
     connection: bullmqConnection,
     defaultJobOptions: {
       removeOnComplete: true,
@@ -234,19 +124,14 @@ export default async function poolRefillJob(): Promise<void> {
     }
   });
 
-  poolRefillChildQueue = new Queue(CHILD_QUEUE, {
+  poolRefillChildQueue = new Queue(POOL_REFILL_CHILD_QUEUE, {
     connection: bullmqConnection
   });
 
   poolRefillFlowProducer = new FlowProducer({ connection: bullmqConnection });
 
-  for (const schedule of SCHEDULES) {
-    await poolRefillQueue.upsertJobScheduler(
-      schedule.name,
-      { pattern: schedule.cron, tz: TIMEZONE },
-      { opts: { removeOnComplete: true, removeOnFail: true } }
-    );
-  }
+  await reconcilePoolRefillSchedulers();
+  onEnglishConfigChanged('pool_refill_schedule.items', () => reconcilePoolRefillSchedulers());
 
   poolRefillParentWorker = createParentWorker(poolRefillFlowProducer);
   poolRefillChildWorker = createChildWorker();
@@ -273,5 +158,5 @@ export default async function poolRefillJob(): Promise<void> {
     void englishCronJobTrackingService.finalizeRunIfBucketsComplete(job.data.trackingRunId);
   });
 
-  logger.info(`[${LOG_TAG}] Queue, workers, and schedulers initialized (${SCHEDULES.map((s) => s.cron).join(', ')})`);
+  logger.info(`[${LOG_TAG}] Queue, workers, and schedulers initialized`);
 }

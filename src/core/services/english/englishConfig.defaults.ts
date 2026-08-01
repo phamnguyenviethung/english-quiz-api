@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseExpression as parseCronExpression } from 'cron-parser';
 import { QUIZ_TYPES } from './questionTypes';
 
 export const CONFIG_RECORD_TYPES = ['str', 'num', 'boolean', 'arr', 'obj'] as const;
@@ -22,6 +23,7 @@ export const QuestionPoolSchema = z
   .object({
     maxPerBucket: positiveIntSchema,
     refillThresholdRatio: z.number().min(0).max(1),
+    perBucketGenerationCap: positiveIntSchema,
     manualFillMinCount: positiveIntSchema,
     manualFillMaxCount: positiveIntSchema,
     manualFillDefaultCount: positiveIntSchema,
@@ -32,6 +34,26 @@ export const QuestionPoolSchema = z
   })
   .refine((value) => value.manualFillDefaultCount <= value.manualFillMaxCount, {
     message: 'manualFillDefaultCount must be <= manualFillMaxCount'
+  });
+
+function isValidCronExpression(cron: string): boolean {
+  try {
+    parseCronExpression(cron);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const PoolRefillScheduleSchema = z
+  .array(
+    z.object({
+      name: z.string().min(1),
+      cron: z.string().min(1).refine(isValidCronExpression, { message: 'Invalid cron expression' })
+    })
+  )
+  .refine((items) => new Set(items.map((item) => item.name)).size === items.length, {
+    message: 'Schedule names must be unique'
   });
 
 export const QuizDistributionSchema = z
@@ -56,13 +78,15 @@ export const JobFlagsSchema = z.object({
 export const EnglishConfigSchemas = {
   question_pool: QuestionPoolSchema,
   quiz_distribution: QuizDistributionSchema,
-  job_flags: JobFlagsSchema
+  job_flags: JobFlagsSchema,
+  pool_refill_schedule: PoolRefillScheduleSchema
 } as const;
 
 export const EnglishConfigDefaults = {
   question_pool: {
     maxPerBucket: 3,
     refillThresholdRatio: 0.5,
+    perBucketGenerationCap: 5,
     manualFillMinCount: 1,
     manualFillMaxCount: 20,
     manualFillDefaultCount: 3,
@@ -85,7 +109,12 @@ export const EnglishConfigDefaults = {
     questionGenEnabled: true,
     poolRefillEnabled: true,
     poolRefillMaxQuestionsPerRun: 50
-  }
+  },
+  pool_refill_schedule: [
+    { name: 'pool-refill-morning', cron: '0 5 * * *' },
+    { name: 'pool-refill-noon', cron: '0 12 * * *' },
+    { name: 'pool-refill-evening', cron: '0 20 * * *' }
+  ]
 } as const;
 
 export type EnglishConfigKey = keyof typeof EnglishConfigDefaults;
@@ -216,7 +245,7 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
     path: 'poolRefillEnabled',
     category: 'jobs',
     label: 'Bật Pool-Refill (scheduled)',
-    description: 'Tắt sẽ bỏ qua các lần refill tự động theo lịch (5h/12h/20h).',
+    description: 'Tắt sẽ bỏ qua các lần refill tự động theo lịch (xem pool_refill_schedule.items).',
     recordType: 'boolean',
     defaultValue: EnglishConfigDefaults.job_flags.poolRefillEnabled,
     validation: { type: 'boolean', label: 'Bật Pool-Refill (scheduled)' },
@@ -235,6 +264,35 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
     validation: intField('Max câu / 1 lần Pool-Refill', 1),
     uiSchema: intField('Max câu / 1 lần Pool-Refill', 1),
     sortOrder: 620
+  },
+  {
+    recordKey: 'pool_refill_schedule.items',
+    namespace: 'pool_refill_schedule',
+    path: 'items',
+    category: 'jobs',
+    label: 'Lịch chạy Pool-Refill (cron)',
+    description:
+      'Danh sách các mốc giờ chạy scheduled pool-refill. Đổi giá trị này sẽ reconcile lại BullMQ job ' +
+      'schedulers ngay lập tức (thêm/xoá scheduler), không cần restart.',
+    recordType: 'arr',
+    defaultValue: EnglishConfigDefaults.pool_refill_schedule,
+    validation: {
+      type: 'arr',
+      label: 'Pool Refill Schedule',
+      itemFields: {
+        name: { type: 'str', label: 'Tên scheduler' },
+        cron: { type: 'str', label: 'Cron expression' }
+      }
+    },
+    uiSchema: {
+      type: 'arr',
+      label: 'Pool Refill Schedule',
+      itemFields: {
+        name: { type: 'str', label: 'Tên scheduler' },
+        cron: { type: 'str', label: 'Cron expression' }
+      }
+    },
+    sortOrder: 630
   }
 ];
 
@@ -242,6 +300,7 @@ export function buildDefaultEnglishConfigSnapshot(): EnglishConfigSnapshot {
   return {
     question_pool: QuestionPoolSchema.parse(EnglishConfigDefaults.question_pool),
     quiz_distribution: QuizDistributionSchema.parse(EnglishConfigDefaults.quiz_distribution),
-    job_flags: JobFlagsSchema.parse(EnglishConfigDefaults.job_flags)
+    job_flags: JobFlagsSchema.parse(EnglishConfigDefaults.job_flags),
+    pool_refill_schedule: PoolRefillScheduleSchema.parse(EnglishConfigDefaults.pool_refill_schedule)
   };
 }

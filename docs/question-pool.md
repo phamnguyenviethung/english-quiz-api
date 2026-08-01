@@ -16,7 +16,15 @@ GET /english/pool/pop?engLevel=A2&topicId=5
                      (client tự gọi /pool/fill để refill, hoặc chờ scheduled refill)
 ```
 
-Pool được nạp đầy bởi 3 cơ chế: **on-demand** (`POST /pool/fill`), **scheduled** (cron 3 lần/ngày), và **manual** (`triggerManualFill`).
+Pool được nạp đầy bởi 3 cơ chế, tất cả dùng chung 1 engine (`src/core/services/english/poolRefill.service.ts`):
+
+| Cơ chế        | Trigger                       | Scope bucket                                           | Target check                                  | Thực thi                        |
+| ------------- | ----------------------------- | ------------------------------------------------------ | --------------------------------------------- | ------------------------------- |
+| **On-demand** | `POST /english/pool/fill`     | 1 bucket cụ thể                                        | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
+| **Scheduled** | cron (`pool_refill_schedule`) | tất cả bucket thiếu                                    | `target` — `< maxPerBucket`                   | BullMQ flow                     |
+| **Manual**    | `POST /admin/pool/refill`     | tất cả bucket (`scope=all` mặc định, hoặc `deficient`) | không lọc (`all`) hoặc `target` (`deficient`) | In-process, bounded concurrency |
+
+On-demand là backstop nhẹ cho quiz serving (pop-miss) — giữ nguyên ngưỡng ratio, không đổi. Scheduled + manual đều ưu tiên đạt đúng `maxPerBucket`, khác nhau ở việc có bị giới hạn `job_flags.poolRefillMaxQuestionsPerRun` hay không (scheduled có, manual admin không — xem "Manual Fill" bên dưới).
 
 ---
 
@@ -178,7 +186,7 @@ interface QuestionGenJobData {
 **Luồng xử lý chính** (`fillBucketDetailed` / `processQuestionGenJob`):
 
 1. Đếm **tổng câu** trong bucket `(engLevel, topicId, quizType)` — nếu đã đủ `maxPool` → skip.
-2. `needed = maxPool - currentCount`; `batchCount = min(requestedCount, needed)` với `requestedCount = clamp(count, 1, 5)`.
+2. `needed = maxPool - currentCount`; `batchCount = min(requestedCount, needed)` với `requestedCount = clamp(count, 1, question_pool.perBucketGenerationCap)` (config, mặc định 5).
 3. Gọi **`generateBatch`** cho đúng `quizType` với model duy nhất (`ctx.model = GEMINI_FLASH_LITE`). AI call fail → throw ngay, bucket ghi `status = failed`, **không retry model khác**.
 4. Mỗi phần tử trong kết quả → một `PushQuestionInput` (kèm `topicId`, token usage).
 5. Nếu sau batch vẫn thiếu chỗ: thử bù tối đa **2** câu với **`pickQuizType()`** ngẫu nhiên (cùng `topicName`).
@@ -190,22 +198,27 @@ interface QuestionGenJobData {
 
 ---
 
-### 3. `src/core/services/english/questionPoolTrigger.service.ts`
+### 3. `src/core/services/english/poolRefill.service.ts` — engine chung
 
-**`ensurePoolFilled(engLevel, topicId, topicName, quizType, optionCount)`** — điểm vào từ API `POST /english/pool/fill`:
+Toàn bộ logic "cần refill gì, refill bao nhiêu, refill bằng cách nào" nằm ở đây, dùng chung cho cả 3 cơ chế:
 
-1. **Feature flag**: nếu config `job_flags.questionGenEnabled` (default `true`) tắt → log và return ngay (không enqueue).
-2. `getPoolCount(engLevel, quizType, topicId)` — tổng câu trong bucket.
-3. Nếu `count >= threshold` → return.
-4. `needed = maxPool - count` → add job với payload `{ engLevel, quizType, optionCount, topicId, topicName, count: needed }` và `jobId` cố định như trên.
+| Function                                            | Vai trò                                                                                                       |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `scanBuckets({ scope, thresholdCheck })`            | Quét `topic × engLevel × quizType`, trả candidate list đã sort (xem "Chống đói bucket" bên dưới)              |
+| `buildRefillPlan(candidates, opts)`                 | Hàm thuần — cắt candidate list theo budget (`maxQuestionsPerRun`) + cap per-bucket (`perBucketCap`), trả plan |
+| `runScheduledRefill(flowProducer, trigger)`         | `scope=deficient, thresholdCheck=target`, có budget, build BullMQ flow                                        |
+| `runOnDemandRefill(bucket)`                         | 1 bucket, `thresholdCheck=ratio`, enqueue 1 job — hành vi giữ nguyên như bản cũ                               |
+| `runManualRefill({ model, countPerBucket, scope })` | `scope=all` mặc định, không giới hạn budget, chạy in-process bounded concurrency                              |
 
-> Dùng `getQuestionGenQueue()` getter — tránh lỗi khởi tạo queue sớm.
+**Chống đói bucket (starvation fix)**: `scanBuckets` sort theo `(deficiency giảm dần, lần refill thành công gần nhất tăng dần — null trước, bucketKey tăng dần)`. Tiêu chí thứ 2 lấy từ `MAX(finishedAt)` trên `english_cron_job_buckets` (không cần cột/bảng mới) — đảm bảo khi 1 lần chạy bị budget-cap giữa chừng, lần chạy sau **ưu tiên đúng những bucket bị bỏ sót lần trước**, thay vì luôn quét theo thứ tự cố định topic → engLevel → quizType và làm đói mãi mãi các bucket cuối danh sách.
+
+**`questionPoolTrigger.service.ts`** (`ensurePoolFilled`) vẫn là entrypoint của `POST /english/pool/fill`, nhưng giờ chỉ là 1 dòng delegate sang `poolRefillService.runOnDemandRefill(...)`.
 
 ---
 
 ## Khởi động hệ thống
 
-- `src/core/cron/index.ts` gọi `questionGenJob()`, `poolRefillJob()`, `manualFillJob()` khi app start → khởi tạo queue và worker
+- `src/core/cron/index.ts` gọi `questionGenJob()`, `poolRefillJob()` khi app start → khởi tạo queue, worker, và reconcile BullMQ job schedulers theo config `pool_refill_schedule.items`
 - `src/api/api.ts` đăng ký `questionGenQueue` và `poolRefillQueue` vào Bull Board → monitor tại `/queues`
 
 ---
@@ -214,19 +227,20 @@ interface QuestionGenJobData {
 
 ### `src/core/cron/pool-refill.job.ts`
 
-Ngoài on-demand refill, hệ thống có **scheduled refill** chạy proactive 3 lần/ngày để giữ pool luôn đầy.
+Ngoài on-demand refill, hệ thống có **scheduled refill** chạy proactive theo lịch để giữ pool luôn đầy.
 
-**Lịch chạy**: 5:00, 12:00, 20:00 (Asia/Ho_Chi_Minh)
+**Lịch chạy**: config-driven qua `pool_refill_schedule.items` (`[{ name, cron }]`), mặc định 3 mốc: 5:00, 12:00, 20:00 (Asia/Ho_Chi_Minh). Đổi giá trị này qua `PATCH /english/config/pool_refill_schedule.items` có hiệu lực **ngay lập tức, không cần restart** — `reconcilePoolRefillSchedulers()` diff danh sách desired vs BullMQ `getJobSchedulers()` hiện tại, xoá scheduler không còn trong config (`removeJobScheduler`) và upsert phần còn lại (`upsertJobScheduler`). Hàm này chạy 1 lần lúc boot và mỗi khi recordKey đó đổi (đăng ký qua `onEnglishConfigChanged`).
 
-**Kiến trúc**: BullMQ Flow (parent–children)
+**Kiến trúc**: BullMQ Flow (parent–children), scan/plan logic nằm ở `poolRefillService.runScheduledRefill()` (xem mục "Engine chung" ở trên), job file chỉ giữ phần bootstrap queue/worker/scheduler.
 
 ```
-Scheduler (upsertJobScheduler × 3 mốc giờ)
+Scheduler (upsertJobScheduler theo pool_refill_schedule.items)
     │
     ▼
 Parent job (pool-refill-scan)
-    │  Quét mọi bucket: 4 engLevel × active topics (+ null) × enabled quiz types
-    │  Mỗi bucket thiếu → tạo 1 child job
+    │  poolRefillService.scanBuckets({ scope: 'deficient', thresholdCheck: 'target' })
+    │  → buildRefillPlan (budget-aware, sort deficiency desc + least-recently-refilled)
+    │  Mỗi bucket trong plan → tạo 1 child job
     ▼
 ┌─────────────┬──────────────┬──────────────┐
 │  Child #1   │  Child #2    │  Child #N    │  ← độc lập, chạy song song (concurrency=3)
@@ -237,20 +251,20 @@ Parent job (pool-refill-scan)
     │               │               │
     ▼               ▼               ▼
   fillBucketDetailed() — shared với question-gen.job.ts
-  (generateBatch + pushQuestions, max 5 câu/lần)
+  (generateBatch + pushQuestions, cap = question_pool.perBucketGenerationCap câu/lần)
 ```
 
-**Queue**: `english-pool-refill` (parent + scheduler), `english-pool-refill-child` (children)
+**Queue**: `english-pool-refill` (parent + scheduler), `english-pool-refill-child` (children) — tên queue export từ `poolRefillService` (`POOL_REFILL_PARENT_QUEUE`/`POOL_REFILL_CHILD_QUEUE`).
 
 **Feature flag**: trước khi scan, parent worker kiểm tra `job_flags.poolRefillEnabled` (default `true`). Nếu tắt → log và return ngay, không tạo tracking run.
 
-**Scan logic (parent)**:
+**Scan + plan logic** (`poolRefillService.scanBuckets` + `buildRefillPlan`):
 
-1. `topicService.getAllActiveTopics()` + `null` (no-topic bucket)
-2. Với mỗi tổ hợp `(engLevel, topicId, quizType)` → `getPoolCount()` → nếu `< maxPool` → tạo child
-3. `count = min(needed, 5)` — mỗi child tối đa sinh 5 câu
-4. **Limit tổng câu/run**: đếm dồn `plannedQuestions`. Khi chạm `job_flags.poolRefillMaxQuestionsPerRun` (default `50`) → clamp bucket cuối cho vừa trần rồi dừng tạo child (tối ưu cost AI).
-5. Tất cả bucket đã đầy → parent hoàn thành ngay, không tạo children
+1. `topicService.getAllActiveTopics()` + `null` (no-topic bucket) × 4 engLevel × enabled quiz types.
+2. Bucket có `currentCount < maxPerBucket` → candidate, `deficiency = maxPerBucket - currentCount`.
+3. Sort candidate theo `(deficiency giảm dần, lần refill thành công gần nhất tăng dần, bucketKey)` — xem "Chống đói bucket" ở mục Engine chung.
+4. `buildRefillPlan`: mỗi bucket được cấp `count = min(deficiency, question_pool.perBucketGenerationCap)`; dừng nhận thêm bucket khi tổng `count` dồn chạm `job_flags.poolRefillMaxQuestionsPerRun` (default `50`) — bucket bị cắt ở lần chạy này sẽ đứng đầu danh sách ưu tiên ở lần chạy kế tiếp nhờ tiêu chí sort #2.
+5. Tất cả bucket đã đầy → parent hoàn thành ngay, không tạo children.
 
 **Retry**: không có. Mỗi child chỉ chạy 1 lần — fail thì ghi bucket `status = failed` và tiếp tục các child khác.
 
@@ -265,14 +279,14 @@ Parent job (pool-refill-scan)
 
 ## Manual Fill
 
-Ngoài scheduled + on-demand, hệ thống hỗ trợ **fill thủ công** qua `triggerManualFill({ model, countPerBucket })` (`src/core/cron/manual-fill.job.ts`).
+`POST /admin/pool/refill` — yêu cầu `ADMIN_API_KEY` (không phải tenant key), gọi `poolRefillService.runManualRefill({ model, countPerBucket, scope })`.
 
-- Không dùng BullMQ — chạy in-process bằng `runWithConcurrency`.
-- Scan toàn bộ: 4 engLevel × enabled quiz types × tất cả active topics → tạo bucket cho mỗi tổ hợp.
-- `skipPoolCheck = true` — fill thêm bất kể bucket đã đầy chưa.
-- Force dùng đúng model đã chọn (không fallback).
-- Concurrency: `question_pool.manualFillConcurrency`. Chống double-run bằng `activeManualRuns` set.
-- Fire-and-forget: trả `{ runId, totalBuckets }` ngay, job chạy nền và tự `summarizeRun`.
+- Không dùng BullMQ — chạy in-process bằng `runWithConcurrency`, concurrency = `question_pool.manualFillConcurrency`.
+- `scope: 'all'` (mặc định): scan toàn bộ bucket bất kể đầy/thiếu, force mỗi bucket đúng `countPerBucket` câu (mặc định `question_pool.manualFillDefaultCount` nếu không truyền) — tương đương `skipPoolCheck = true` của bản cũ.
+- `scope: 'deficient'`: chỉ scan bucket còn thiếu, top-up đúng phần còn thiếu tới `maxPerBucket` (hoặc `countPerBucket` nếu truyền tường minh).
+- **Không bị giới hạn** `job_flags.poolRefillMaxQuestionsPerRun` — đây là hành động admin chủ động, chấp nhận chi phí, khác với scheduled refill (có budget tự động).
+- Chống double-run bằng `activeManualRuns` set (module state trong `poolRefill.service.ts`).
+- Fire-and-forget: trả `{ runId, totalBuckets }` ngay, job chạy nền và tự `summarizeRun`. Theo dõi tiến độ qua `GET /english/cron/runs/:runId` (admin key cũng gọi được endpoint này nhờ `ADMIN_TENANT` bypass ở `tenantAuth.plugin.ts`).
 
 ## Monitor
 

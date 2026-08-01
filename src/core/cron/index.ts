@@ -1,7 +1,6 @@
 import logger from '@/configs/logger.config';
 import questionGenJob from './question-gen.job';
 import poolRefillJob from './pool-refill.job';
-import manualFillJob from './manual-fill.job';
 import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
 
 const STALE_RUN_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 giờ
@@ -14,7 +13,6 @@ export default async function initCronJobs(): Promise<void> {
 
   await questionGenJob();
   await poolRefillJob();
-  await manualFillJob();
 
   logger.info('✅ All cron jobs registered and started');
 }

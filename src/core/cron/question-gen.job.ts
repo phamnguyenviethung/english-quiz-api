@@ -4,6 +4,7 @@ import studyService, { type BatchGenerateOptions, type DifficultyContext } from 
 import questionPoolService, {
   type PushQuestionInput,
   getMaxPoolSize,
+  getPerBucketGenerationCap,
   pickQuizType
 } from '@/core/services/english/questionPool.service';
 import type { QuizType } from '@/core/services/english/questionTypes';
@@ -220,7 +221,7 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
           tokenOut: 0
         };
       }
-      batchCount = Math.min(Math.min(requestedCount, 5), needed);
+      batchCount = Math.min(Math.min(requestedCount, getPerBucketGenerationCap()), needed);
     }
 
     const ctx: DifficultyContext = {

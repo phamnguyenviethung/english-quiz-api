@@ -67,6 +67,10 @@ export function getRefillThreshold(): number {
   return Math.ceil(config.maxPerBucket * config.refillThresholdRatio);
 }
 
+export function getPerBucketGenerationCap(): number {
+  return getEnglishConfigSnapshot().question_pool.perBucketGenerationCap;
+}
+
 export function pickQuizType(): QuizType {
   const enabledItems = getEnglishConfigSnapshot().quiz_distribution.filter((item) => item.enabled && item.weight > 0);
   const totalWeight = enabledItems.reduce((sum, item) => sum + item.weight, 0);
@@ -288,5 +292,6 @@ export default {
   pushQuestions,
   clearPool,
   getMaxPoolSize,
-  getRefillThreshold
+  getRefillThreshold,
+  getPerBucketGenerationCap
 };

@@ -2,6 +2,8 @@ import logger from '@/configs/logger.config';
 import { NotFoundException } from '@/core/exceptions';
 import tenantService from '@/core/services/tenant/tenant.service';
 import apiKeyService from '@/core/services/tenant/apiKey.service';
+import poolRefillService from '@/core/services/english/poolRefill.service';
+import { MODELS } from '@/configs/aiClient.config';
 
 // ─── Tenants ────────────────────────────────────────────────────────────────────
 
@@ -75,6 +77,22 @@ async function setQuizTypeAccess(tenantId: number, quizTypes: string[]) {
   return { tenantId, quizTypes: applied };
 }
 
+// ─── Pool ───────────────────────────────────────────────────────────────────────
+
+interface TriggerManualPoolRefillInput {
+  model?: string;
+  countPerBucket?: number;
+  scope?: 'all' | 'deficient';
+}
+
+async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
+  const model = input.model ?? MODELS.GEMINI_FLASH_LITE;
+  logger.info(
+    `[Admin] Manual pool refill scope=${input.scope ?? 'all'} model=${model} countPerBucket=${input.countPerBucket ?? '-'}`
+  );
+  return poolRefillService.runManualRefill({ model, countPerBucket: input.countPerBucket, scope: input.scope });
+}
+
 export default {
   listTenants,
   getTenant,
@@ -84,5 +102,6 @@ export default {
   listKeys,
   revokeKey,
   setTopicAccess,
-  setQuizTypeAccess
+  setQuizTypeAccess,
+  triggerManualPoolRefill
 };

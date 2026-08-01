@@ -1,6 +1,7 @@
 import { asc, eq } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
+import { BusinessLogicException } from '@/core/exceptions';
 import {
   englishConfigRecord,
   englishConfigRecordType,
@@ -131,6 +132,10 @@ function assignPath(target: Record<string, unknown>, path: string, value: unknow
 function applyRecordValue(raw: EnglishConfigSnapshot, def: EnglishConfigRecordDefinition, value: unknown): void {
   if (def.namespace === 'quiz_distribution' && def.path === 'items') {
     raw.quiz_distribution = value as EnglishConfigSnapshot['quiz_distribution'];
+    return;
+  }
+  if (def.namespace === 'pool_refill_schedule' && def.path === 'items') {
+    raw.pool_refill_schedule = value as EnglishConfigSnapshot['pool_refill_schedule'];
     return;
   }
 
@@ -314,13 +319,18 @@ export async function refreshEnglishConfig(): Promise<EnglishConfigSnapshot> {
 
 export function parseEnglishConfigValue(recordKey: string, value: unknown): unknown {
   const def = definitionByRecordKey.get(recordKey);
-  if (!def) throw new Error(`Unknown English config record key: ${recordKey}`);
-  return validateBasicValue(def.recordType, value, def.validation);
+  if (!def) throw new BusinessLogicException(`Unknown English config record key: ${recordKey}`);
+  try {
+    return validateBasicValue(def.recordType, value, def.validation);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new BusinessLogicException(`Invalid value for ${recordKey}: ${message}`);
+  }
 }
 
 export async function updateEnglishConfig(recordKey: string, value: unknown): Promise<EnglishConfigRecordView> {
   const def = definitionByRecordKey.get(recordKey);
-  if (!def) throw new Error(`Unknown English config record key: ${recordKey}`);
+  if (!def) throw new BusinessLogicException(`Unknown English config record key: ${recordKey}`);
 
   const parsedValue = parseEnglishConfigValue(recordKey, value);
 
@@ -355,7 +365,12 @@ export async function updateEnglishConfig(recordKey: string, value: unknown): Pr
       };
     });
 
-    buildSnapshotFromRows(nextRows, def.namespace);
+    try {
+      buildSnapshotFromRows(nextRows, def.namespace);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new BusinessLogicException(`Invalid value for ${recordKey}: ${message}`);
+    }
 
     const [nextRow] = await tx
       .update(englishConfigRecord)
@@ -368,6 +383,7 @@ export async function updateEnglishConfig(recordKey: string, value: unknown): Pr
 
   await refreshEnglishConfig();
   logger.info(`[EnglishConfig] Updated recordKey=${recordKey}`);
+  await runEnglishConfigChangeHooks(recordKey, parsedValue);
   const [view] = await enrichRows([updated]);
   if (!view) throw new Error(`Failed to load updated English config record: ${recordKey}`);
   return view;
@@ -375,8 +391,31 @@ export async function updateEnglishConfig(recordKey: string, value: unknown): Pr
 
 export async function resetEnglishConfigToDefault(recordKey: string): Promise<EnglishConfigRecordView> {
   const def = definitionByRecordKey.get(recordKey);
-  if (!def) throw new Error(`Unknown English config record key: ${recordKey}`);
+  if (!def) throw new BusinessLogicException(`Unknown English config record key: ${recordKey}`);
   return updateEnglishConfig(recordKey, def.defaultValue);
+}
+
+// Cho phép các module khác (vd BullMQ scheduler) phản ứng khi 1 recordKey cụ thể
+// đổi giá trị, mà không cần englishConfig.service.ts biết về BullMQ/queue nào cả.
+type ConfigChangeHook = (newValue: unknown) => Promise<void> | void;
+const changeHooks = new Map<string, ConfigChangeHook[]>();
+
+export function onEnglishConfigChanged(recordKey: string, hook: ConfigChangeHook): void {
+  const hooks = changeHooks.get(recordKey) ?? [];
+  hooks.push(hook);
+  changeHooks.set(recordKey, hooks);
+}
+
+async function runEnglishConfigChangeHooks(recordKey: string, newValue: unknown): Promise<void> {
+  const hooks = changeHooks.get(recordKey);
+  if (!hooks || hooks.length === 0) return;
+  for (const hook of hooks) {
+    try {
+      await hook(newValue);
+    } catch (err) {
+      logger.warn(`[EnglishConfig] Change hook failed for recordKey=${recordKey}: ${err}`);
+    }
+  }
 }
 
 export function isEnglishConfigKey(value: string): boolean {
@@ -390,6 +429,7 @@ export default {
   getEnglishConfigSnapshot,
   hasEnglishConfigLoadedFromDb,
   isEnglishConfigKey,
+  onEnglishConfigChanged,
   parseEnglishConfigValue,
   refreshEnglishConfig,
   resetEnglishConfigToDefault,

@@ -14,13 +14,16 @@ Mỗi row trong `english_config_records` là một setting riêng:
 - `recordType`: lấy từ bảng `english_config_record_types`
 - typed value columns: `valueText`, `valueNumber`, `valueBoolean`, `valueJson`
 
-Config hiện phục vụ **3 namespace**:
+Config hiện phục vụ **4 namespace**:
 
 - Question pool (`question_pool`) — cap/threshold pool + manual-fill
 - Quiz distribution (`quiz_distribution`) — weighted quiz type
 - Job flags (`job_flags`) — bật/tắt cron job gen + limit câu mỗi lần refill
+- Pool refill schedule (`pool_refill_schedule`) — lịch chạy cron của scheduled pool-refill
 
-Prompt text, prompt examples, Zod question schemas, và cron schedule string không thuộc config.
+Prompt text, prompt examples, và Zod question schemas không thuộc config.
+
+Một số recordKey có **side effect ngoài in-memory snapshot** khi update — ví dụ đổi `pool_refill_schedule.items` sẽ reconcile lại BullMQ job schedulers ngay (thêm/xoá lịch chạy). Cơ chế: `englishConfig.service.ts` export `onEnglishConfigChanged(recordKey, hook)`, module quan tâm (ví dụ `pool-refill.job.ts`) tự đăng ký hook lúc boot; `updateEnglishConfig()` gọi mọi hook đã đăng ký cho `recordKey` đó ngay sau khi refresh snapshot. Config service không import ngược vào BullMQ/queue nào — giữ layering 1 chiều.
 
 ## 2. File Chính
 
@@ -95,6 +98,7 @@ Các record:
 
 - `question_pool.maxPerBucket`
 - `question_pool.refillThresholdRatio`
+- `question_pool.perBucketGenerationCap` (`num`, default `5`): trần số câu sinh trong 1 lần gọi LLM cho 1 bucket. Áp dụng cho mọi cơ chế refill (on-demand, scheduled, manual) — thay hardcode `5` cũ.
 - `question_pool.manualFillMinCount`
 - `question_pool.manualFillMaxCount`
 - `question_pool.manualFillDefaultCount`
@@ -113,10 +117,18 @@ Mỗi item có `quizType`, `weight`, `enabled`. Runtime filter `enabled=true` v�
 Các record:
 
 - `job_flags.questionGenEnabled` (`boolean`, default `true`): tắt → `ensurePoolFilled` không enqueue job refill khi pool cạn (trigger qua `POST /english/pool/fill`).
-- `job_flags.poolRefillEnabled` (`boolean`, default `true`): tắt → parent worker bỏ qua các lần scheduled refill (5h/12h/20h), không tạo tracking run.
-- `job_flags.poolRefillMaxQuestionsPerRun` (`num`, default `50`): giới hạn tổng số câu generate trong một lần Pool-Refill. Scan vẫn quét đủ bucket nhưng dừng tạo child khi tổng câu cần generate chạm trần (tối ưu cost AI).
+- `job_flags.poolRefillEnabled` (`boolean`, default `true`): tắt → parent worker bỏ qua các lần scheduled refill (xem `pool_refill_schedule.items`), không tạo tracking run.
+- `job_flags.poolRefillMaxQuestionsPerRun` (`num`, default `50`): giới hạn tổng số câu generate trong một lần Pool-Refill **scheduled**. Scan vẫn quét đủ bucket nhưng dừng tạo child khi tổng câu cần generate chạm trần (tối ưu cost AI). **Không** áp dụng cho manual refill (`POST /admin/pool/refill`) — hành động admin chủ động, chấp nhận chi phí.
 
-Manual-fill không có flag chặn — chủ động trigger nên giữ nguyên.
+### `pool_refill_schedule`
+
+Record:
+
+- `pool_refill_schedule.items` (`arr`, default 3 mốc `05:00/12:00/20:00` Asia/Ho_Chi_Minh)
+
+Mỗi item có `name` (unique, dùng làm BullMQ `jobSchedulerId`) và `cron` (cron expression, validate bằng `cron-parser` ngay ở Zod schema — sai cú pháp → 400 khi PATCH). Đổi giá trị này reconcile BullMQ job schedulers ngay lập tức, không cần restart (xem §1).
+
+Manual-fill (`/admin/pool/refill`) không có flag chặn — chủ động trigger, dùng `ADMIN_API_KEY` riêng nên không cần feature flag.
 
 ## 6. API
 
@@ -145,7 +157,6 @@ Tất cả yêu cầu Bearer tenant key: `config:read` cho GET, `config:write` c
 - Prompt text dài hoặc prompt examples
 - Zod question output schema
 - Field contract giữa StudyService và handler
-- Cron schedule string đã register lúc process start
 - Config theo user/end-user, vì service là global quiz-infra config (không quản lý end-user)
 
 ## 9. Checklist Khi Debug
