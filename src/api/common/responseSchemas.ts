@@ -5,7 +5,8 @@ import { QuizTypeSchema } from './schemas';
 import {
   QuestionPoolSchema,
   QuizDistributionSchema,
-  JobFlagsSchema
+  JobFlagsSchema,
+  PoolRefillScheduleSchema
 } from '@/core/services/english/englishConfig.defaults';
 import {
   VocabQuestionSchema,
@@ -140,7 +141,8 @@ export const PoolQuestionPageSchema = t.Object({
 export const EnglishConfigSnapshotSchema = z.object({
   question_pool: QuestionPoolSchema,
   quiz_distribution: QuizDistributionSchema,
-  job_flags: JobFlagsSchema
+  job_flags: JobFlagsSchema,
+  pool_refill_schedule: PoolRefillScheduleSchema
 });
 
 export const EnglishConfigSnapshotResponseSchema = z.object({

@@ -61,6 +61,10 @@ export async function startApi(): Promise<void> {
               name: 'Admin / Grants',
               description: 'Gán allow-list topic/quizType cho tenant. Yêu cầu ADMIN_API_KEY.'
             },
+            {
+              name: 'Admin / Pool',
+              description: 'Refill thủ công toàn bộ question pool. Yêu cầu ADMIN_API_KEY.'
+            },
             { name: 'English / Meta', description: 'Metadata tĩnh (danh sách quiz type).' },
             {
               name: 'English / Generation',
