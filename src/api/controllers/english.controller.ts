@@ -16,7 +16,10 @@ import studyService, {
   type VerbUseMatchQuestion,
   type StructuredOutputUsage
 } from '@/core/services/english/study.service';
-import questionPoolService, { pickQuizType } from '@/core/services/english/questionPool.service';
+import questionPoolService, {
+  pickQuizType,
+  type ListPoolQuestionsInput
+} from '@/core/services/english/questionPool.service';
 import questionPoolTriggerService from '@/core/services/english/questionPoolTrigger.service';
 import topicService from '@/core/services/english/topic.service';
 import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
@@ -103,6 +106,13 @@ async function countPool(tenant: TenantContext, engLevel: EngLevel, quizType: Qu
   return { engLevel, quizType, topicId, count };
 }
 
+async function listPoolQuestions(tenant: TenantContext, input: ListPoolQuestionsInput) {
+  if (input.withoutTopic) assertTopicAllowed(tenant, null);
+  else if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
+  if (input.quizType) assertQuizTypeAllowed(tenant, input.quizType);
+  return questionPoolService.listQuestions(input);
+}
+
 interface FillPoolInput {
   engLevel: EngLevel;
   quizType: QuizType;
@@ -184,6 +194,7 @@ export default {
   generateReading,
   popFromPool,
   countPool,
+  listPoolQuestions,
   fillPool,
   pickPoolQuizType,
   listQuizTypes,

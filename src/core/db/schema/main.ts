@@ -32,18 +32,27 @@ export type InsertEnglishTopic = typeof englishTopic.$inferInsert;
 // Question pool
 // ----------------------------------------------------------------------------
 
-export const englishQuestionPool = pgTable('english_question_pool', {
-  id: serial().primaryKey(),
-  quizType: text().notNull(),
-  engLevel: text().notNull(),
-  optionCount: integer().notNull(),
-  questionData: text().notNull(),
-  model: text().notNull(),
-  tokenIn: integer().default(0).notNull(),
-  tokenOut: integer().default(0).notNull(),
-  topicId: integer().references(() => englishTopic.id),
-  createdAt: timestamp().defaultNow()
-});
+export const englishQuestionPool = pgTable(
+  'english_question_pool',
+  {
+    id: serial().primaryKey(),
+    quizType: text().notNull(),
+    engLevel: text().notNull(),
+    optionCount: integer().notNull(),
+    questionData: text().notNull(),
+    model: text().notNull(),
+    tokenIn: integer().default(0).notNull(),
+    tokenOut: integer().default(0).notNull(),
+    topicId: integer().references(() => englishTopic.id),
+    createdAt: timestamp().defaultNow()
+  },
+  (table) => [
+    // Bucket (engLevel, quizType, topicId) là truy vấn nóng nhất: count/pop/refill và
+    // filter ở admin UI đều đi qua tổ hợp này.
+    index('idx_question_pool_bucket').on(table.engLevel, table.quizType, table.topicId),
+    index('idx_question_pool_created_at').on(table.createdAt)
+  ]
+);
 
 export type EnglishQuestionPool = typeof englishQuestionPool.$inferSelect;
 export type InsertEnglishQuestionPool = typeof englishQuestionPool.$inferInsert;

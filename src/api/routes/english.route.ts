@@ -9,6 +9,7 @@ import {
   EnglishTopicSchema,
   TopicPairSchema,
   PoolQuestionSchema,
+  PoolQuestionPageSchema,
   EnglishConfigSnapshotResponseSchema,
   EnglishConfigRecordViewSchema,
   EnglishCronJobRunSchema,
@@ -159,6 +160,37 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       }
     }
   )
+  .get('/pool/questions', async ({ query, tenant }) => ok(await englishController.listPoolQuestions(tenant, query)), {
+    auth: { scope: SCOPES.QUIZ_READ },
+    query: t.Object({
+      engLevel: t.Optional(EngLevelSchema),
+      quizType: t.Optional(QuizTypeSchema),
+      topicId: t.Optional(t.Numeric()),
+      withoutTopic: t.Optional(t.BooleanString()),
+      model: t.Optional(t.String()),
+      q: t.Optional(t.String({ maxLength: 100 })),
+      sort: t.Optional(t.Union([t.Literal('id_asc'), t.Literal('id_desc')])),
+      page: t.Optional(t.Numeric({ minimum: 1 })),
+      pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100 }))
+    }),
+    detail: {
+      tags: ['English / Question Pool'],
+      summary: 'List pool questions',
+      description:
+        'Danh sách câu hỏi trong pool, có filter + phân trang (mặc định pageSize 20, tối đa 100, sort id_asc). ' +
+        'Mọi filter đều optional — không truyền gì là lấy toàn bộ pool. `withoutTopic=true` lọc riêng bucket ' +
+        'không có topic (topicId IS NULL) và thắng `topicId` nếu truyền cả hai. `q` tìm ILIKE trên nội dung câu ' +
+        'hỏi + tên model; nếu `q` toàn số thì thêm điều kiện khớp chính xác `id`. Yêu cầu scope `quiz:read`; ' +
+        'topicId/quizType ngoài allow-list của tenant trả 403.',
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(PoolQuestionPageSchema),
+      400: ApiErrorSchema,
+      403: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
   .post('/pool/fill', async ({ body, tenant }) => ok(await englishController.fillPool(tenant, body)), {
     auth: { scope: SCOPES.POOL_FILL },
     body: t.Object({

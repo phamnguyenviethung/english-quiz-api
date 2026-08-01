@@ -114,6 +114,27 @@ export const PoolQuestionSchema = t.Object({
   topicId: t.Nullable(t.Number())
 });
 
+// Row của list endpoint — thêm engLevel/topicName/createdAt so với PoolQuestionSchema
+// (pop chỉ trả đúng phần payload câu hỏi, list cần thêm cột để render table admin).
+export const PoolQuestionListItemSchema = t.Composite([
+  PoolQuestionSchema,
+  t.Object({
+    engLevel: t.String(),
+    topicName: t.Nullable(
+      t.String({ description: 'displayName của topic, fallback name. null khi câu không gắn topic.' })
+    ),
+    createdAt: t.Nullable(DateTimeSchema)
+  })
+]);
+
+export const PoolQuestionPageSchema = t.Object({
+  items: t.Array(PoolQuestionListItemSchema),
+  page: t.Number({ description: 'Trang hiện tại, 1-based.' }),
+  pageSize: t.Number(),
+  total: t.Number({ description: 'Tổng số câu khớp filter, không phụ thuộc trang.' }),
+  totalPages: t.Number()
+});
+
 // ── English config ───────────────────────────────────────────────────────────
 // Zod schema có sẵn (englishConfig.defaults.ts) — dùng trực tiếp thay vì viết lại TypeBox.
 export const EnglishConfigSnapshotSchema = z.object({

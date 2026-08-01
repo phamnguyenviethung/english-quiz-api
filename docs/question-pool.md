@@ -47,6 +47,57 @@ Pool được phân theo **3 chiều**: **`(engLevel, topicId, quizType)`**.
 
 ---
 
+## Browse pool — `GET /english/pool/questions`
+
+Endpoint đọc phục vụ admin UI (màn "Kho câu hỏi" trên dashboard). Scope `quiz:read`.
+
+| Query param    | Kiểu               | Mặc định  | Ghi chú                                                                             |
+| -------------- | ------------------ | --------- | ----------------------------------------------------------------------------------- |
+| `engLevel`     | `A1\|A2\|B1\|B2`   | không lọc |                                                                                     |
+| `quizType`     | quizType hợp lệ    | không lọc | Ngoài allow-list của tenant → 403                                                   |
+| `topicId`      | number             | không lọc | Ngoài allow-list của tenant → 403                                                   |
+| `withoutTopic` | boolean            | `false`   | Lọc riêng bucket `topicId IS NULL`; **thắng** `topicId`                             |
+| `model`        | string             | không lọc | So khớp chính xác tên model                                                         |
+| `q`            | string, ≤100 ký tự | không lọc | ILIKE trên `questionData` + `model`; nếu toàn số thì thêm nhánh khớp chính xác `id` |
+| `sort`         | `id_asc\|id_desc`  | `id_asc`  | Sort theo `id` (serial, đơn điệu theo thời gian tạo)                                |
+| `page`         | number, 1-based    | `1`       |                                                                                     |
+| `pageSize`     | number, 1..100     | `20`      | > 100 → 400 VALIDATION                                                              |
+
+`q` được escape trước khi đưa vào `ILIKE` (`%`, `_`, `\` do người dùng gõ không được coi là wildcard). Ở quy mô hiện tại (~vài nghìn câu) seq scan `ILIKE %...%` đủ nhanh nên chưa cần index; nếu pool lớn lên đáng kể, cân nhắc extension `pg_trgm` + GIN index trên `questionData`.
+
+Response `ok()` bọc object phân trang (không dùng `list()` vì helper đó chỉ gắn `total = data.length`):
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": 333,
+        "quizType": "paragraph",
+        "engLevel": "A1",
+        "optionCount": 4,
+        "questionData": "{...}",
+        "model": "...",
+        "tokenIn": 0,
+        "tokenOut": 0,
+        "topicId": 25,
+        "topicName": "Skincare",
+        "createdAt": "2026-07-31T23:18:22.955Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 4426,
+    "totalPages": 222
+  }
+}
+```
+
+`topicName` = `displayName ?? name` của topic (leftJoin `english_topics`), `null` khi câu không gắn topic. `total` là tổng số câu khớp filter, độc lập với `page`.
+
+---
+
 ## Database Schema
 
 Bảng **`english_topics`** — chủ đề học (`src/core/db/schema/main.ts`)
@@ -78,6 +129,9 @@ CREATE TABLE english_question_pool (
   topicId      integer REFERENCES english_topics(id),
   createdAt    timestamp DEFAULT now()
 );
+
+CREATE INDEX idx_question_pool_bucket     ON english_question_pool ("engLevel", "quizType", "topicId");
+CREATE INDEX idx_question_pool_created_at ON english_question_pool ("createdAt");
 ```
 
 > Bucket chỉ gồm `engLevel` + `topicId` + `quizType`. Không có cột `used` — pop không tiêu thụ câu.
@@ -88,13 +142,14 @@ CREATE TABLE english_question_pool (
 
 ### 1. `src/core/services/english/questionPool.service.ts`
 
-| Function                                    | Mô tả                                                                        |
-| ------------------------------------------- | ---------------------------------------------------------------------------- |
-| `getPoolCount(engLevel, quizType, topicId)` | Đếm **tổng số câu** trong bucket `(engLevel, topicId, quizType)`             |
-| `popQuestion(engLevel, topicId)`            | `ORDER BY RANDOM() LIMIT 1`; không xóa/đánh dấu; trả `PoolQuestion \| null`  |
-| `pushQuestions(questions[])`                | Insert batch; kiểm tra capacity (tổng câu) theo từng bucket trước khi insert |
-| `clearPool(engLevel?, topicId?)`            | Xóa pool (filter tùy chọn theo engLevel / topicId)                           |
-| `pickQuizType()`                            | Random quiz type theo `quiz_distribution` (weighted)                         |
+| Function                                    | Mô tả                                                                                        |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `getPoolCount(engLevel, quizType, topicId)` | Đếm **tổng số câu** trong bucket `(engLevel, topicId, quizType)`                             |
+| `popQuestion(engLevel, topicId)`            | `ORDER BY RANDOM() LIMIT 1`; không xóa/đánh dấu; trả `PoolQuestion \| null`                  |
+| `listQuestions(input)`                      | List có filter + phân trang cho admin UI; trả `{ items, page, pageSize, total, totalPages }` |
+| `pushQuestions(questions[])`                | Insert batch; kiểm tra capacity (tổng câu) theo từng bucket trước khi insert                 |
+| `clearPool(engLevel?, topicId?)`            | Xóa pool (filter tùy chọn theo engLevel / topicId)                                           |
+| `pickQuizType()`                            | Random quiz type theo `quiz_distribution` (weighted)                                         |
 
 **`pushQuestions`**: gom bucket key `engLevel:topicId:quizType`, preload count, cập nhật in-memory sau mỗi insert trong cùng transaction để không vượt `maxPerBucket`.
 
