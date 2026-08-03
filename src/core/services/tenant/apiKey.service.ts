@@ -47,16 +47,19 @@ async function listKeys(tenantId: number): Promise<PublicApiKey[]> {
   return rows.map(({ key: _key, ...rest }) => rest);
 }
 
-async function revokeKey(apiKeyId: number): Promise<void> {
+// Scope theo tenantId để không thu hồi nhầm key của tenant khác.
+async function revokeKey(tenantId: number, apiKeyId: number): Promise<void> {
   const [updated] = await db.transaction(async (tx) =>
     tx
       .update(tenantApiKey)
       .set({ isActive: false, revokedAt: new Date() })
-      .where(eq(tenantApiKey.id, apiKeyId))
+      .where(and(eq(tenantApiKey.id, apiKeyId), eq(tenantApiKey.tenantId, tenantId)))
       .returning()
   );
-  if (!updated) throw new NotFoundException(`[ApiKeyService] Không tìm thấy key: ${apiKeyId}`);
-  logger.info(`[ApiKeyService] Revoked key id=${apiKeyId}`);
+  if (!updated) {
+    throw new NotFoundException(`[ApiKeyService] Không tìm thấy key ${apiKeyId} thuộc tenant ${tenantId}`);
+  }
+  logger.info(`[ApiKeyService] Revoked key id=${apiKeyId} tenant=${tenantId}`);
 }
 
 // Ghi lastUsedAt có throttle — chỉ update nếu quá LAST_USED_THROTTLE_MS.

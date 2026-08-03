@@ -60,12 +60,22 @@ function listKeys(tenantId: number) {
   return apiKeyService.listKeys(tenantId);
 }
 
-async function revokeKey(apiKeyId: number) {
-  await apiKeyService.revokeKey(apiKeyId);
+async function revokeKey(tenantId: number, apiKeyId: number) {
+  await apiKeyService.revokeKey(tenantId, apiKeyId);
   return { apiKeyId, revoked: true };
 }
 
 // ─── Grants (allow-list) ──────────────────────────────────────────────────────────
+
+async function getTopicAccess(tenantId: number) {
+  await tenantService.requireTenant(tenantId);
+  return { tenantId, topicIds: await tenantService.getAllowedTopicIds(tenantId) };
+}
+
+async function getQuizTypeAccess(tenantId: number) {
+  await tenantService.requireTenant(tenantId);
+  return { tenantId, quizTypes: await tenantService.getAllowedQuizTypes(tenantId) };
+}
 
 async function setTopicAccess(tenantId: number, topicIds: number[]) {
   const applied = await tenantService.setTopicAccess(tenantId, topicIds);
@@ -101,6 +111,8 @@ export default {
   issueKey,
   listKeys,
   revokeKey,
+  getTopicAccess,
+  getQuizTypeAccess,
   setTopicAccess,
   setQuizTypeAccess,
   triggerManualPoolRefill

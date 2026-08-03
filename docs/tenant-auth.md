@@ -71,7 +71,7 @@ Migration chỉ **thêm bảng mới**, không đụng bảng `english_*` cũ.
 - Format: `eqk_<48 hex random>`. Key **lưu plaintext** trong cột `key` (unique) — chưa cần hash.
 - Verify: lookup trực tiếp `tenant_api_keys` `WHERE key = raw AND isActive` → check tenant active → build `TenantContext`. Không parse, không hash, không timing-safe compare.
 - **Response issue key trả plaintext một lần** (`POST /admin/tenants/:id/keys`) cho nhất quán UX; list key thì ẩn cột `key`.
-- Rotate/revoke: cấp key mới hoặc `DELETE /admin/tenants/:id/keys/:apiKeyId` (set `isActive=false`).
+- Rotate/revoke: cấp key mới hoặc `DELETE /admin/tenants/:id/keys/:apiKeyId` (set `isActive=false`). Revoke scope theo `tenantId` — key không thuộc tenant đó trả 404.
 - `lastUsedAt` được cập nhật có **throttle 5 phút** để tránh ghi DB mỗi request.
 
 > Lưu ý bảo mật: key lưu plaintext nên ai đọc được DB sẽ thấy key. Nếu cần siết sau này, chuyển sang lưu `sha256(key)` + lookup theo hash (không đổi API bên ngoài).
@@ -127,8 +127,10 @@ Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer 
 | `PATCH /admin/tenants/:id`                 | Update tenant (name/scopes/allowAll*/isActive). Soft-deactivate = gửi `{ isActive: false }` |
 | `POST /admin/tenants/:id/keys`             | Cấp API key mới (**response chứa plaintext — lưu ngay**) → **201**                          |
 | `GET /admin/tenants/:id/keys`              | List key (ẩn cột `key`)                                                                     |
-| `DELETE /admin/tenants/:id/keys/:apiKeyId` | Thu hồi key theo id số (set `isActive=false`)                                               |
+| `DELETE /admin/tenants/:id/keys/:apiKeyId` | Thu hồi key (set `isActive=false`). Key không thuộc tenant `:id` → 404                      |
+| `GET /admin/tenants/:id/topics`            | Allow-list topic hiện tại `{ tenantId, topicIds }`                                          |
 | `PUT /admin/tenants/:id/topics`            | Set allow-list topic `{ topicIds: number[] }` (replace)                                     |
+| `GET /admin/tenants/:id/quiz-types`        | Allow-list quizType hiện tại `{ tenantId, quizTypes }`                                      |
 | `PUT /admin/tenants/:id/quiz-types`        | Set allow-list quizType `{ quizTypes: string[] }` (replace)                                 |
 
 ## 8. Env & Boot

@@ -89,6 +89,18 @@ export const IssuedApiKeySchema = t.Object({
   warning: t.String()
 });
 
+// ── Tenant grants (allow-list) ───────────────────────────────────────────────
+// Dùng chung cho cả GET và PUT để client sinh ra 1 type duy nhất.
+export const TenantTopicAccessSchema = t.Object({
+  tenantId: t.Number(),
+  topicIds: t.Array(t.Number())
+});
+
+export const TenantQuizTypeAccessSchema = t.Object({
+  tenantId: t.Number(),
+  quizTypes: t.Array(t.String())
+});
+
 // ── English topic ────────────────────────────────────────────────────────────
 export const EnglishTopicSchema = t.Object({
   id: t.Number(),

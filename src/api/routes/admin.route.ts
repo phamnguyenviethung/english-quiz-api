@@ -8,7 +8,9 @@ import {
   COMMON_ERRORS,
   TenantSchema,
   PublicApiKeySchema,
-  IssuedApiKeySchema
+  IssuedApiKeySchema,
+  TenantTopicAccessSchema,
+  TenantQuizTypeAccessSchema
 } from '@/api/common/responseSchemas';
 import { adminAuthPlugin } from '@/api/plugins/adminAuth.plugin';
 import adminController from '@/api/controllers/admin.controller';
@@ -144,22 +146,60 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       ...COMMON_ERRORS
     }
   })
-  .delete('/tenants/:id/keys/:apiKeyId', async ({ params }) => ok(await adminController.revokeKey(params.apiKeyId)), {
-    params: t.Object({ id: t.Numeric(), apiKeyId: t.Numeric() }),
+  .delete(
+    '/tenants/:id/keys/:apiKeyId',
+    async ({ params }) => ok(await adminController.revokeKey(params.id, params.apiKeyId)),
+    {
+      params: t.Object({ id: t.Numeric(), apiKeyId: t.Numeric() }),
+      detail: {
+        tags: ['Admin / API Keys'],
+        summary: 'Revoke API key',
+        description:
+          `Thu hồi key (set isActive=false). Key phải thuộc đúng tenant \`:id\`, ` +
+          `không thì trả 404. ${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(t.Object({ apiKeyId: t.Number(), revoked: t.Boolean() })),
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
+
+  // ── Grants (allow-list) ──────────────────────────────────────────────────────
+  .get('/tenants/:id/topics', async ({ params }) => ok(await adminController.getTopicAccess(params.id)), {
+    params: IdParam,
     detail: {
-      tags: ['Admin / API Keys'],
-      summary: 'Revoke API key',
-      description: `Thu hồi key theo id (set isActive=false). ${ADMIN_AUTH_DESCRIPTION}`,
+      tags: ['Admin / Grants'],
+      summary: 'Get topic allow-list',
+      description:
+        `Allow-list topic hiện tại của tenant. Mảng rỗng nghĩa là chưa cấp topic cụ thể nào — ` +
+        `quyền thực tế còn phụ thuộc cờ \`allowAllTopics\` trên tenant. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },
     response: {
-      200: ApiOk(t.Object({ apiKeyId: t.Number(), revoked: t.Boolean() })),
+      200: ApiOk(TenantTopicAccessSchema),
       404: ApiErrorSchema,
       ...COMMON_ERRORS
     }
   })
-
-  // ── Grants (allow-list) ──────────────────────────────────────────────────────
+  .get('/tenants/:id/quiz-types', async ({ params }) => ok(await adminController.getQuizTypeAccess(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Grants'],
+      summary: 'Get quizType allow-list',
+      description:
+        `Allow-list quizType hiện tại của tenant. Mảng rỗng nghĩa là chưa cấp quizType cụ thể nào — ` +
+        `quyền thực tế còn phụ thuộc cờ \`allowAllQuizTypes\` trên tenant. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(TenantQuizTypeAccessSchema),
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
   .put(
     '/tenants/:id/topics',
     async ({ params, body }) => ok(await adminController.setTopicAccess(params.id, body.topicIds)),
@@ -175,7 +215,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
         security: [{ bearerAuth: [] }]
       },
       response: {
-        200: ApiOk(t.Object({ tenantId: t.Number(), topicIds: t.Array(t.Number()) })),
+        200: ApiOk(TenantTopicAccessSchema),
         400: ApiErrorSchema,
         404: ApiErrorSchema,
         ...COMMON_ERRORS
@@ -197,7 +237,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
         security: [{ bearerAuth: [] }]
       },
       response: {
-        200: ApiOk(t.Object({ tenantId: t.Number(), quizTypes: t.Array(t.String()) })),
+        200: ApiOk(TenantQuizTypeAccessSchema),
         400: ApiErrorSchema,
         404: ApiErrorSchema,
         ...COMMON_ERRORS
