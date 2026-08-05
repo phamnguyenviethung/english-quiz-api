@@ -66,10 +66,17 @@ Endpoint đọc phục vụ admin UI (màn "Kho câu hỏi" trên dashboard). Sc
 | `topicId`      | number             | không lọc | Ngoài allow-list của tenant → 403                                                   |
 | `withoutTopic` | boolean            | `false`   | Lọc riêng bucket `topicId IS NULL`; **thắng** `topicId`                             |
 | `model`        | string             | không lọc | So khớp chính xác tên model                                                         |
+| `optionCount`  | number, 1..10      | không lọc | Số đáp án của câu (pool thực tế là 4 cho A1/A2, 5 cho B1/B2)                        |
+| `createdFrom`  | ISO date-time      | không lọc | `createdAt >= createdFrom`                                                          |
+| `createdTo`    | ISO date-time      | không lọc | `createdAt <= createdTo`                                                            |
 | `q`            | string, ≤100 ký tự | không lọc | ILIKE trên `questionData` + `model`; nếu toàn số thì thêm nhánh khớp chính xác `id` |
-| `sort`         | `id_asc\|id_desc`  | `id_asc`  | Sort theo `id` (serial, đơn điệu theo thời gian tạo)                                |
+| `sort`         | xem bên dưới       | `id_asc`  |                                                                                     |
 | `page`         | number, 1-based    | `1`       |                                                                                     |
 | `pageSize`     | number, 1..100     | `20`      | > 100 → 400 VALIDATION                                                              |
+
+Giá trị `sort` hợp lệ: `id_asc`, `id_desc`, `created_asc`, `created_desc`, `token_asc`, `token_desc`. `token_*` sắp xếp theo tổng `tokenIn + tokenOut`. `created_*` và `token_*` không unique nên luôn tie-break thêm bằng `id` để phân trang không trùng/sót row.
+
+`createdAt` nullable (row cũ có thể `NULL`) — khi truyền `createdFrom`/`createdTo` thì các row đó bị loại khỏi kết quả. Index `idx_question_pool_created_at` phục vụ cả filter lẫn sort theo ngày.
 
 `q` được escape trước khi đưa vào `ILIKE` (`%`, `_`, `\` do người dùng gõ không được coi là wildcard). Ở quy mô hiện tại (~vài nghìn câu) seq scan `ILIKE %...%` đủ nhanh nên chưa cần index; nếu pool lớn lên đáng kể, cân nhắc extension `pg_trgm` + GIN index trên `questionData`.
 
@@ -103,6 +110,24 @@ Response `ok()` bọc object phân trang (không dùng `list()` vì helper đó 
 ```
 
 `topicName` = `displayName ?? name` của topic (leftJoin `english_topics`), `null` khi câu không gắn topic. `total` là tổng số câu khớp filter, độc lập với `page`.
+
+---
+
+## List models — `GET /english/pool/models`
+
+Trả về các model đang có câu trong pool kèm số lượng, sắp xếp giảm dần theo số câu. Dùng để đổ dropdown filter `model` ở admin UI (không hardcode danh sách model ở dashboard). Không có query param. Scope `quiz:read`.
+
+```json
+{
+  "success": true,
+  "data": [
+    { "model": "google/gemini-2.5-flash-lite:nitro", "count": 3120 },
+    { "model": "x-ai/grok-4.1-fast", "count": 1306 }
+  ]
+}
+```
+
+Khác `ai_models` table ở chỗ đây là model **thực tế đã sinh ra câu đang nằm trong pool**, kể cả model đã bị gỡ khỏi config.
 
 ---
 

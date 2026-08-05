@@ -148,6 +148,11 @@ export const PoolQuestionPageSchema = t.Object({
   totalPages: t.Number()
 });
 
+export const PoolModelStatSchema = t.Object({
+  model: t.String(),
+  count: t.Number({ description: 'Số câu trong pool được sinh bởi model này.' })
+});
+
 // ── English config ───────────────────────────────────────────────────────────
 // Zod schema có sẵn (englishConfig.defaults.ts) — dùng trực tiếp thay vì viết lại TypeBox.
 export const EnglishConfigSnapshotSchema = z.object({

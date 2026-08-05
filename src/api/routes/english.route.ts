@@ -10,6 +10,7 @@ import {
   TopicPairSchema,
   PoolQuestionSchema,
   PoolQuestionPageSchema,
+  PoolModelStatSchema,
   EnglishConfigSnapshotResponseSchema,
   EnglishConfigRecordViewSchema,
   EnglishCronJobRunSchema,
@@ -168,8 +169,20 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       topicId: t.Optional(t.Numeric()),
       withoutTopic: t.Optional(t.BooleanString()),
       model: t.Optional(t.String()),
+      optionCount: t.Optional(t.Numeric({ minimum: 1, maximum: 10 })),
+      createdFrom: t.Optional(t.String({ format: 'date-time' })),
+      createdTo: t.Optional(t.String({ format: 'date-time' })),
       q: t.Optional(t.String({ maxLength: 100 })),
-      sort: t.Optional(t.Union([t.Literal('id_asc'), t.Literal('id_desc')])),
+      sort: t.Optional(
+        t.Union([
+          t.Literal('id_asc'),
+          t.Literal('id_desc'),
+          t.Literal('created_asc'),
+          t.Literal('created_desc'),
+          t.Literal('token_asc'),
+          t.Literal('token_desc')
+        ])
+      ),
       page: t.Optional(t.Numeric({ minimum: 1 })),
       pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100 }))
     }),
@@ -180,7 +193,9 @@ export const englishRoute = new Elysia({ prefix: '/english' })
         'Danh sách câu hỏi trong pool, có filter + phân trang (mặc định pageSize 20, tối đa 100, sort id_asc). ' +
         'Mọi filter đều optional — không truyền gì là lấy toàn bộ pool. `withoutTopic=true` lọc riêng bucket ' +
         'không có topic (topicId IS NULL) và thắng `topicId` nếu truyền cả hai. `q` tìm ILIKE trên nội dung câu ' +
-        'hỏi + tên model; nếu `q` toàn số thì thêm điều kiện khớp chính xác `id`. Yêu cầu scope `quiz:read`; ' +
+        'hỏi + tên model; nếu `q` toàn số thì thêm điều kiện khớp chính xác `id`. `createdFrom`/`createdTo` là ' +
+        'ISO date-time, lọc theo `createdAt` — câu cũ không có `createdAt` sẽ bị loại khi dùng filter này. ' +
+        '`sort` theo `token_*` sắp xếp trên tổng `tokenIn + tokenOut`. Yêu cầu scope `quiz:read`; ' +
         'topicId/quizType ngoài allow-list của tenant trả 403.',
       security: [{ bearerAuth: [] }]
     },
@@ -188,6 +203,21 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       200: ApiOk(PoolQuestionPageSchema),
       400: ApiErrorSchema,
       403: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/pool/models', async () => ok(await englishController.listPoolModels()), {
+    auth: { scope: SCOPES.QUIZ_READ },
+    detail: {
+      tags: ['English / Question Pool'],
+      summary: 'List distinct models in pool',
+      description:
+        'Danh sách model đang có câu hỏi trong pool kèm số lượng câu, sắp xếp giảm dần theo số lượng. ' +
+        'Dùng để đổ dropdown filter model ở admin UI. Yêu cầu scope `quiz:read`.',
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Array(PoolModelStatSchema)),
       ...COMMON_ERRORS
     }
   })

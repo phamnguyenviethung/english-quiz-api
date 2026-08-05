@@ -113,6 +113,12 @@ async function listPoolQuestions(tenant: TenantContext, input: ListPoolQuestions
   return questionPoolService.listQuestions(input);
 }
 
+// Không lọc theo allow-list của tenant: đây chỉ là danh sách model để đổ dropdown filter,
+// không lộ nội dung câu hỏi của topic/quizType ngoài phạm vi tenant.
+function listPoolModels() {
+  return questionPoolService.listPoolModels();
+}
+
 interface FillPoolInput {
   engLevel: EngLevel;
   quizType: QuizType;
@@ -195,6 +201,7 @@ export default {
   popFromPool,
   countPool,
   listPoolQuestions,
+  listPoolModels,
   fillPool,
   pickPoolQuizType,
   listQuizTypes,

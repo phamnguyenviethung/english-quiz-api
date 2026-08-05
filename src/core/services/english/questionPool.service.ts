@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { englishQuestionPool, englishTopic, type InsertEnglishQuestionPool } from '@/core/db/schema/main';
@@ -24,16 +24,35 @@ export interface PoolQuestionListItem extends PoolQuestion {
   createdAt: Date | null;
 }
 
+export type PoolQuestionsSort = 'id_asc' | 'id_desc' | 'created_asc' | 'created_desc' | 'token_asc' | 'token_desc';
+
+export const POOL_QUESTIONS_SORTS: PoolQuestionsSort[] = [
+  'id_asc',
+  'id_desc',
+  'created_asc',
+  'created_desc',
+  'token_asc',
+  'token_desc'
+];
+
 export interface ListPoolQuestionsInput {
   engLevel?: string;
   quizType?: QuizType;
   topicId?: number;
   withoutTopic?: boolean;
   model?: string;
+  optionCount?: number;
+  createdFrom?: string;
+  createdTo?: string;
   q?: string;
-  sort?: 'id_asc' | 'id_desc';
+  sort?: PoolQuestionsSort;
   page?: number;
   pageSize?: number;
+}
+
+export interface PoolModelStat {
+  model: string;
+  count: number;
 }
 
 export interface PoolQuestionPage {
@@ -91,6 +110,17 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
+/** Danh sách model đang có câu trong pool + số lượng, dùng đổ dropdown filter ở admin UI. */
+async function listPoolModels(): Promise<PoolModelStat[]> {
+  const rows = await db
+    .select({ model: englishQuestionPool.model, total: count() })
+    .from(englishQuestionPool)
+    .groupBy(englishQuestionPool.model)
+    .orderBy(desc(count()), asc(englishQuestionPool.model));
+
+  return rows.map((row) => ({ model: row.model, count: row.total }));
+}
+
 async function getPoolCount(engLevel: string, quizType: QuizType, topicId: number | null = null): Promise<number> {
   const [result] = await db
     .select({ total: count() })
@@ -138,6 +168,18 @@ async function popQuestion(engLevel: string, topicId: number | null = null): Pro
   return mapRowToPoolQuestion(row);
 }
 
+const totalTokenExpr = sql`${englishQuestionPool.tokenIn} + ${englishQuestionPool.tokenOut}`;
+
+// createdAt/token không unique nên tie-break bằng id, nếu không phân trang có thể trùng/sót row.
+const ORDER_BY_CLAUSES: Record<PoolQuestionsSort, SQL[]> = {
+  id_asc: [asc(englishQuestionPool.id)],
+  id_desc: [desc(englishQuestionPool.id)],
+  created_asc: [asc(englishQuestionPool.createdAt), asc(englishQuestionPool.id)],
+  created_desc: [desc(englishQuestionPool.createdAt), desc(englishQuestionPool.id)],
+  token_asc: [asc(totalTokenExpr), asc(englishQuestionPool.id)],
+  token_desc: [desc(totalTokenExpr), desc(englishQuestionPool.id)]
+};
+
 /**
  * List câu hỏi trong pool có filter + phân trang, phục vụ admin UI.
  * `withoutTopic` thắng `topicId` khi truyền cả hai: bucket không topic là một bucket riêng
@@ -154,8 +196,13 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
   if (input.engLevel) conditions.push(eq(englishQuestionPool.engLevel, input.engLevel));
   if (input.quizType) conditions.push(eq(englishQuestionPool.quizType, input.quizType));
   if (input.model) conditions.push(eq(englishQuestionPool.model, input.model));
+  if (input.optionCount !== undefined) conditions.push(eq(englishQuestionPool.optionCount, input.optionCount));
   if (input.withoutTopic) conditions.push(buildTopicCondition(null));
   else if (input.topicId !== undefined) conditions.push(buildTopicCondition(input.topicId));
+
+  // createdAt nullable — row cũ chưa có createdAt sẽ bị loại khi lọc theo khoảng ngày.
+  if (input.createdFrom) conditions.push(gte(englishQuestionPool.createdAt, new Date(input.createdFrom)));
+  if (input.createdTo) conditions.push(lte(englishQuestionPool.createdAt, new Date(input.createdTo)));
 
   const keyword = input.q?.trim();
   if (keyword) {
@@ -167,7 +214,7 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
   }
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-  const orderBy = input.sort === 'id_desc' ? [desc(englishQuestionPool.id)] : [asc(englishQuestionPool.id)];
+  const orderBy = ORDER_BY_CLAUSES[input.sort ?? 'id_asc'] ?? ORDER_BY_CLAUSES.id_asc;
 
   const [rows, [totalRow]] = await Promise.all([
     db
@@ -289,6 +336,7 @@ export default {
   getPoolCount,
   popQuestion,
   listQuestions,
+  listPoolModels,
   pushQuestions,
   clearPool,
   getMaxPoolSize,
