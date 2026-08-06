@@ -35,7 +35,7 @@ if (IS_PRODUCTION) {
 }
 
 const logger = winston.createLogger({
-  defaultMeta: { 'service.name': 'kakabot26' },
+  defaultMeta: { 'service.name': 'englishQuiz' },
   format: winston.format.combine(
     winston.format.splat(),
     winston.format.timestamp({
