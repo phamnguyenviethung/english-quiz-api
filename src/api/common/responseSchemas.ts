@@ -68,6 +68,16 @@ export const TenantSchema = t.Object({
   updatedAt: t.Nullable(DateTimeSchema)
 });
 
+// ── AI Model ──────────────────────────────────────────────────────────────────
+export const AiModelSchema = t.Object({
+  id: t.Number(),
+  key: t.String(),
+  modelId: t.String(),
+  isActive: t.Boolean(),
+  createdAt: t.Nullable(DateTimeSchema),
+  updatedAt: t.Nullable(DateTimeSchema)
+});
+
 // ── Tenant API key ───────────────────────────────────────────────────────────
 // PublicApiKey = Omit<TenantApiKey,'key'> — plaintext key không bao giờ list ra.
 export const PublicApiKeySchema = t.Object({

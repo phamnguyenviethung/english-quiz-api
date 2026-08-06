@@ -56,6 +56,7 @@ export async function startApi(): Promise<void> {
           tags: [
             { name: 'Health', description: 'Liveness check (public, không auth).' },
             { name: 'Admin / Tenants', description: 'Tenant CRUD. Yêu cầu ADMIN_API_KEY.' },
+            { name: 'Admin / Models', description: 'AI Model CRUD (dùng cho sinh câu hỏi). Yêu cầu ADMIN_API_KEY.' },
             { name: 'Admin / API Keys', description: 'Issue/list/revoke tenant API key. Yêu cầu ADMIN_API_KEY.' },
             {
               name: 'Admin / Grants',

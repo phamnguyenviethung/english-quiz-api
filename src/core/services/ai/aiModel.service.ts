@@ -2,18 +2,9 @@ import { and, asc, eq, ne, or } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { aiModel, type AiModel, type InsertAiModel } from '@/core/db/schema/main';
+import { ConflictException, NotFoundException } from '@/core/exceptions';
 
 export type AiModelConflictField = 'key' | 'modelId';
-
-export class AiModelConflictError extends Error {
-  readonly field: AiModelConflictField;
-
-  constructor(field: AiModelConflictField) {
-    super(`[AiModelService] Duplicate ${field}`);
-    this.name = 'AiModelConflictError';
-    this.field = field;
-  }
-}
 
 interface AiModelConflictLookupInput {
   key?: string;
@@ -69,7 +60,12 @@ async function findConflict({
   return null;
 }
 
-function toConflictError(err: unknown): AiModelConflictError | null {
+const FIELD_TO_MESSAGE: Record<AiModelConflictField, string> = {
+  key: '[AiModelService] "key" đã tồn tại',
+  modelId: '[AiModelService] "modelId" đã tồn tại'
+};
+
+function toConflictError(err: unknown): ConflictException | null {
   if (!(err instanceof Error)) return null;
 
   const constraint =
@@ -97,7 +93,7 @@ function toConflictError(err: unknown): AiModelConflictError | null {
   if (code !== '23505' || !constraint) return null;
 
   const field = UNIQUE_CONSTRAINT_TO_FIELD[constraint];
-  return field ? new AiModelConflictError(field) : null;
+  return field ? new ConflictException(FIELD_TO_MESSAGE[field]) : null;
 }
 
 async function createModel({ key, modelId, isActive }: CreateModelInput): Promise<AiModel> {
@@ -127,7 +123,7 @@ async function updateModel(
         .where(eq(aiModel.id, id))
         .returning()
     );
-    if (!updated) throw new Error(`[AiModelService] Model not found: ${id}`);
+    if (!updated) throw new NotFoundException(`[AiModelService] Không tìm thấy model: ${id}`);
     logger.info(`[AiModelService] Updated model id=${id}`);
     return updated;
   } catch (err) {

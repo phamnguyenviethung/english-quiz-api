@@ -7,6 +7,7 @@ import {
   ApiErrorSchema,
   COMMON_ERRORS,
   TenantSchema,
+  AiModelSchema,
   PublicApiKeySchema,
   IssuedApiKeySchema,
   TenantTopicAccessSchema,
@@ -98,6 +99,87 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
     },
     response: {
       200: ApiOk(TenantSchema),
+      400: ApiErrorSchema,
+      404: ApiErrorSchema,
+      409: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+
+  // ── AI Models ────────────────────────────────────────────────────────────────
+  .get('/models', async () => list(await adminController.listModels()), {
+    detail: {
+      tags: ['Admin / Models'],
+      summary: 'List AI models',
+      description: `Danh sách toàn bộ AI model (dùng bởi aiClient.getStudyModels khi chọn model sinh câu hỏi). ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiList(AiModelSchema),
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/models/:id', async ({ params }) => ok(await adminController.getModel(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Models'],
+      summary: 'Get AI model by id',
+      description: `Chi tiết 1 AI model. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(AiModelSchema),
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .post(
+    '/models',
+    async ({ body, set }) => {
+      set.status = 201;
+      return created(await adminController.createModel(body));
+    },
+    {
+      body: t.Object({
+        key: t.String({ minLength: 1, description: 'Nhãn ngắn gọn, unique. VD: GEMINI_FLASH_LITE' }),
+        modelId: t.String({
+          minLength: 1,
+          description: 'OpenRouter model id, unique. VD: google/gemini-2.5-flash-lite:nitro'
+        }),
+        isActive: t.Optional(t.Boolean({ description: 'Mặc định true.' }))
+      }),
+      detail: {
+        tags: ['Admin / Models'],
+        summary: 'Create AI model',
+        description: `Tạo AI model mới. \`key\` và \`modelId\` đều phải unique — trùng trả 409. ${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        201: ApiOk(AiModelSchema),
+        400: ApiErrorSchema,
+        409: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
+  // deactivate được gộp vào PATCH: gửi { isActive: false }. Không có endpoint delete riêng.
+  .patch('/models/:id', async ({ params, body }) => ok(await adminController.updateModel(params.id, body)), {
+    params: IdParam,
+    body: t.Object({
+      key: t.Optional(t.String({ minLength: 1 })),
+      modelId: t.Optional(t.String({ minLength: 1 })),
+      isActive: t.Optional(t.Boolean())
+    }),
+    detail: {
+      tags: ['Admin / Models'],
+      summary: 'Update AI model',
+      description:
+        `Partial update (key/modelId/isActive). Soft-deactivate bằng { isActive: false } ` +
+        `— không có endpoint delete riêng. Đổi \`key\`/\`modelId\` trùng model khác trả 409. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(AiModelSchema),
       400: ApiErrorSchema,
       404: ApiErrorSchema,
       409: ApiErrorSchema,

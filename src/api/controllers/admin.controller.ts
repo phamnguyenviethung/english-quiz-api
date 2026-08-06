@@ -3,6 +3,7 @@ import { NotFoundException } from '@/core/exceptions';
 import tenantService from '@/core/services/tenant/tenant.service';
 import apiKeyService from '@/core/services/tenant/apiKey.service';
 import poolRefillService from '@/core/services/english/poolRefill.service';
+import aiModelService from '@/core/services/ai/aiModel.service';
 import { MODELS } from '@/configs/aiClient.config';
 
 // ─── Tenants ────────────────────────────────────────────────────────────────────
@@ -39,6 +40,39 @@ interface UpdateTenantInput {
 
 function updateTenant(id: number, input: UpdateTenantInput) {
   return tenantService.updateTenant(id, input);
+}
+
+// ─── AI Models ───────────────────────────────────────────────────────────────────
+
+function listModels() {
+  return aiModelService.getAllModels();
+}
+
+async function getModel(id: number) {
+  const found = await aiModelService.getModelById(id);
+  if (!found) throw new NotFoundException(`Không tìm thấy model: ${id}`);
+  return found;
+}
+
+interface CreateModelInput {
+  key: string;
+  modelId: string;
+  isActive?: boolean;
+}
+
+function createModel(input: CreateModelInput) {
+  logger.info(`[Admin] Create AI model key="${input.key}" modelId="${input.modelId}"`);
+  return aiModelService.createModel({ key: input.key, modelId: input.modelId, isActive: input.isActive ?? true });
+}
+
+interface UpdateModelInput {
+  key?: string;
+  modelId?: string;
+  isActive?: boolean;
+}
+
+function updateModel(id: number, input: UpdateModelInput) {
+  return aiModelService.updateModel(id, input);
 }
 
 // ─── API keys ────────────────────────────────────────────────────────────────────
@@ -106,6 +140,10 @@ export default {
   getTenant,
   createTenant,
   updateTenant,
+  listModels,
+  getModel,
+  createModel,
+  updateModel,
   issueKey,
   listKeys,
   revokeKey,

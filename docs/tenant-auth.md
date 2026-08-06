@@ -125,6 +125,10 @@ Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer 
 | `PUT /admin/tenants/:id/topics`            | Set allow-list topic `{ topicIds: number[] }` (replace)                                           |
 | `GET /admin/tenants/:id/quiz-types`        | Allow-list quizType hiện tại `{ tenantId, quizTypes }`                                            |
 | `PUT /admin/tenants/:id/quiz-types`        | Set allow-list quizType `{ quizTypes: string[] }` (replace)                                       |
+| `POST /admin/models`                       | Tạo AI model `{ key, modelId, isActive? }` → **201**, `key`/`modelId` unique                      |
+| `GET /admin/models`                        | List AI model (bảng `ai_models`, dùng bởi `aiClient.getStudyModels`)                              |
+| `GET /admin/models/:id`                    | Chi tiết AI model                                                                                 |
+| `PATCH /admin/models/:id`                  | Update AI model (key/modelId/isActive). Soft-deactivate = gửi `{ isActive: false }`               |
 
 ## 8. Env & Boot
 
