@@ -62,7 +62,6 @@ export const TenantSchema = t.Object({
   name: t.String(),
   description: t.Nullable(t.String()),
   isActive: t.Boolean(),
-  scopes: t.Array(t.String()),
   allowAllTopics: t.Boolean(),
   allowAllQuizTypes: t.Boolean(),
   createdAt: t.Nullable(DateTimeSchema),

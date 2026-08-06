@@ -61,7 +61,6 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       body: t.Object({
         name: t.String({ minLength: 1 }),
         description: t.Optional(t.Nullable(t.String())),
-        scopes: t.Optional(t.Array(t.String())),
         allowAllTopics: t.Optional(t.Boolean()),
         allowAllQuizTypes: t.Optional(t.Boolean())
       }),
@@ -85,7 +84,6 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
     body: t.Object({
       name: t.Optional(t.String({ minLength: 1 })),
       description: t.Optional(t.Nullable(t.String())),
-      scopes: t.Optional(t.Array(t.String())),
       allowAllTopics: t.Optional(t.Boolean()),
       allowAllQuizTypes: t.Optional(t.Boolean()),
       isActive: t.Optional(t.Boolean())
@@ -94,7 +92,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       tags: ['Admin / Tenants'],
       summary: 'Update tenant',
       description:
-        `Partial update (name/description/scopes/allowAll*/isActive). Soft-deactivate bằng { isActive: false } ` +
+        `Partial update (name/description/allowAll*/isActive). Soft-deactivate bằng { isActive: false } ` +
         `— không có endpoint delete riêng. Đổi \`name\` trùng tenant khác trả 409. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },

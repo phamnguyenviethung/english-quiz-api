@@ -85,8 +85,8 @@ export async function startApi(): Promise<void> {
                 scheme: 'bearer',
                 description:
                   'Tenant API key (`eqk_...`) cho `/english/*`, hoặc `ADMIN_API_KEY` — admin key là super key, ' +
-                  'dùng được cho cả `/admin/*` lẫn `/english/*` với full scope và bỏ qua allow-list topic/quizType. ' +
-                  'Admin key cũng nhận qua header `x-admin-key`.'
+                  'dùng được cho cả `/admin/*` lẫn `/english/*` kể cả endpoint admin-only, và bỏ qua allow-list ' +
+                  'topic/quizType. Admin key cũng nhận qua header `x-admin-key`.'
               }
             }
           }

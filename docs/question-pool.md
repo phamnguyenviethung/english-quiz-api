@@ -13,16 +13,16 @@ GET /english/pool/pop?engLevel=A2&topicId=5
   có câu ──────────► trả về (câu vẫn nằm lại pool, có thể pop lại lần sau)
      │
     null ──────────► 404 { success:false, error:{ code:"NOT_FOUND", message:"Pool trống cho bucket này" } }
-                     (client tự gọi /pool/fill để refill, hoặc chờ scheduled refill)
+                     (chờ scheduled refill, hoặc admin gọi /pool/fill để refill ngay)
 ```
 
 Pool được nạp đầy bởi 3 cơ chế, tất cả dùng chung 1 engine (`src/core/services/english/poolRefill.service.ts`):
 
-| Cơ chế        | Trigger                       | Scope bucket                                           | Target check                                  | Thực thi                        |
-| ------------- | ----------------------------- | ------------------------------------------------------ | --------------------------------------------- | ------------------------------- |
-| **On-demand** | `POST /english/pool/fill`     | 1 bucket cụ thể                                        | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
-| **Scheduled** | cron (`pool_refill_schedule`) | tất cả bucket thiếu                                    | `target` — `< maxPerBucket`                   | BullMQ flow                     |
-| **Manual**    | `POST /admin/pool/refill`     | tất cả bucket (`scope=all` mặc định, hoặc `deficient`) | không lọc (`all`) hoặc `target` (`deficient`) | In-process, bounded concurrency |
+| Cơ chế        | Trigger                                         | Scope bucket                                           | Target check                                  | Thực thi                        |
+| ------------- | ----------------------------------------------- | ------------------------------------------------------ | --------------------------------------------- | ------------------------------- |
+| **On-demand** | `POST /english/pool/fill` (chỉ `ADMIN_API_KEY`) | 1 bucket cụ thể                                        | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
+| **Scheduled** | cron (`pool_refill_schedule`)                   | tất cả bucket thiếu                                    | `target` — `< maxPerBucket`                   | BullMQ flow                     |
+| **Manual**    | `POST /admin/pool/refill`                       | tất cả bucket (`scope=all` mặc định, hoặc `deficient`) | không lọc (`all`) hoặc `target` (`deficient`) | In-process, bounded concurrency |
 
 On-demand là backstop nhẹ cho quiz serving (pop-miss) — giữ nguyên ngưỡng ratio, không đổi. Scheduled + manual đều ưu tiên đạt đúng `maxPerBucket`, khác nhau ở việc có bị giới hạn `job_flags.poolRefillMaxQuestionsPerRun` hay không (scheduled có, manual admin không — xem "Manual Fill" bên dưới).
 
@@ -57,7 +57,7 @@ Pool được phân theo **3 chiều**: **`(engLevel, topicId, quizType)`**.
 
 ## Browse pool — `GET /english/pool/questions`
 
-Endpoint đọc phục vụ admin UI (màn "Kho câu hỏi" trên dashboard). Scope `quiz:read`.
+Endpoint đọc phục vụ admin UI (màn "Kho câu hỏi" trên dashboard). Cần tenant API key hợp lệ.
 
 | Query param    | Kiểu               | Mặc định  | Ghi chú                                                                             |
 | -------------- | ------------------ | --------- | ----------------------------------------------------------------------------------- |
@@ -115,7 +115,7 @@ Response `ok()` bọc object phân trang (không dùng `list()` vì helper đó 
 
 ## List models — `GET /english/pool/models`
 
-Trả về các model đang có câu trong pool kèm số lượng, sắp xếp giảm dần theo số câu. Dùng để đổ dropdown filter `model` ở admin UI (không hardcode danh sách model ở dashboard). Không có query param. Scope `quiz:read`.
+Trả về các model đang có câu trong pool kèm số lượng, sắp xếp giảm dần theo số câu. Dùng để đổ dropdown filter `model` ở admin UI (không hardcode danh sách model ở dashboard). Không có query param. Cần tenant API key hợp lệ.
 
 ```json
 {

@@ -47,7 +47,7 @@ async function listKeys(tenantId: number): Promise<PublicApiKey[]> {
   return rows.map(({ key: _key, ...rest }) => rest);
 }
 
-// Scope theo tenantId để không thu hồi nhầm key của tenant khác.
+// Giới hạn theo tenantId để không thu hồi nhầm key của tenant khác.
 async function revokeKey(tenantId: number, apiKeyId: number): Promise<void> {
   const [updated] = await db.transaction(async (tx) =>
     tx

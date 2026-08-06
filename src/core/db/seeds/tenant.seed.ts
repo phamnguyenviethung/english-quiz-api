@@ -14,7 +14,6 @@ import apiKeyService from '@/core/services/tenant/apiKey.service';
 import { QUIZ_TYPES } from '@/core/services/english/questionTypes';
 
 const DEMO_NAME = 'demo';
-const DEMO_SCOPES = ['quiz:read', 'pool:fill', 'config:read', 'cron:read'];
 
 async function seedTenant(): Promise<void> {
   const [existing] = await db.select().from(tenant).where(eq(tenant.name, DEMO_NAME)).limit(1);
@@ -24,7 +23,6 @@ async function seedTenant(): Promise<void> {
     (await tenantService.createTenant({
       name: DEMO_NAME,
       description: 'Demo tenant cho test tenant auth',
-      scopes: DEMO_SCOPES,
       // Demo được truy cập tất cả topic + quizType cho tiện test.
       allowAllTopics: true,
       allowAllQuizTypes: true

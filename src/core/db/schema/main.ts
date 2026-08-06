@@ -259,9 +259,6 @@ export const tenant = pgTable('tenants', {
   name: text().notNull().unique(),
   description: text(),
   isActive: boolean().default(true).notNull(),
-  // Capability list, ví dụ ['quiz:read', 'pool:fill']. Dạng string[] để thêm
-  // scope mới không cần đổi schema.
-  scopes: jsonb().$type<string[]>().default([]).notNull(),
   // Bỏ qua topic/quizType allow-list cho tenant tin cậy (truy cập tất cả).
   allowAllTopics: boolean().default(false).notNull(),
   allowAllQuizTypes: boolean().default(false).notNull(),

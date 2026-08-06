@@ -16,7 +16,6 @@ import { isQuizType, type QuizType } from '@/core/services/english/questionTypes
 export interface TenantContext {
   id: number;
   name: string;
-  scopes: string[];
   allowAllTopics: boolean;
   allowedTopicIds: number[];
   allowAllQuizTypes: boolean;
@@ -28,7 +27,6 @@ export interface TenantContext {
 interface CreateTenantInput {
   name: string;
   description?: string | null;
-  scopes?: string[];
   allowAllTopics?: boolean;
   allowAllQuizTypes?: boolean;
 }
@@ -70,7 +68,6 @@ async function createTenant(input: CreateTenantInput): Promise<Tenant> {
         .values({
           name: input.name,
           description: input.description ?? null,
-          scopes: input.scopes ?? [],
           allowAllTopics: input.allowAllTopics ?? false,
           allowAllQuizTypes: input.allowAllQuizTypes ?? false
         })
@@ -88,9 +85,7 @@ async function createTenant(input: CreateTenantInput): Promise<Tenant> {
 
 async function updateTenant(
   id: number,
-  data: Partial<
-    Pick<InsertTenant, 'name' | 'description' | 'scopes' | 'allowAllTopics' | 'allowAllQuizTypes' | 'isActive'>
-  >
+  data: Partial<Pick<InsertTenant, 'name' | 'description' | 'allowAllTopics' | 'allowAllQuizTypes' | 'isActive'>>
 ): Promise<Tenant> {
   try {
     const [updated] = await db.transaction(async (tx) =>
@@ -190,7 +185,6 @@ async function getTenantContext(tenantId: number): Promise<TenantContext | null>
   return {
     id: found.id,
     name: found.name,
-    scopes: found.scopes,
     allowAllTopics: found.allowAllTopics,
     allowedTopicIds,
     allowAllQuizTypes: found.allowAllQuizTypes,

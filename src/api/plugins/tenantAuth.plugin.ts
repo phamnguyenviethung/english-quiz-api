@@ -3,21 +3,18 @@ import apiKeyService from '@/core/services/tenant/apiKey.service';
 import type { TenantContext } from '@/core/services/tenant/tenant.service';
 import { ForbiddenException, UnauthorizedException } from '@/core/exceptions';
 import { extractAdminKey, isAdminKey } from '@/api/common/adminKey';
-import { SCOPES } from '@/api/common/scopes';
 
 /**
- * Context ảo cho request dùng ADMIN_API_KEY: đủ mọi scope, bỏ qua allow-list
- * topic/quizType. Nhờ vậy admin key dùng được ở cả /admin/* lẫn /english/* mà
- * không cần cấp tenant key riêng cho dashboard.
+ * Context ảo cho request dùng ADMIN_API_KEY: bỏ qua allow-list topic/quizType
+ * và vượt qua guard admin-only. Nhờ vậy admin key dùng được ở cả /admin/* lẫn
+ * /english/* mà không cần cấp tenant key riêng cho dashboard.
  *
- * `Object.values(SCOPES)` để scope thêm sau này tự động có hiệu lực. id = 0 an
- * toàn vì tenantId không xuống tới tầng data (data quiz là global, xem comment
- * ở src/core/db/schema/main.ts). Constant này không được mutate ở đâu.
+ * id = 0 an toàn vì tenantId không xuống tới tầng data (data quiz là global,
+ * xem comment ở src/core/db/schema/main.ts). Constant này không được mutate ở đâu.
  */
 const ADMIN_TENANT: TenantContext = {
   id: 0,
   name: '__admin__',
-  scopes: Object.values(SCOPES),
   allowAllTopics: true,
   allowedTopicIds: [],
   allowAllQuizTypes: true,
@@ -33,14 +30,11 @@ function extractBearer(authorization: string | undefined): string | null {
   return token;
 }
 
-// Kiểm tra tenant có scope yêu cầu không. Không có scope nào yêu cầu → chỉ cần
-// xác thực hợp lệ.
-function assertScopes(tenant: TenantContext, required: string | string[] | undefined): void {
-  if (!required) return;
-  const requiredList = Array.isArray(required) ? required : [required];
-  const missing = requiredList.filter((s) => !tenant.scopes.includes(s));
-  if (missing.length > 0) {
-    throw new ForbiddenException(`Thiếu scope: ${missing.join(', ')}`);
+// Tenant key chỉ được đọc quiz. Endpoint quản trị nằm dưới /english/* (nạp
+// pool, sửa config, tạo topic, xem cron) chỉ chấp nhận ADMIN_API_KEY.
+function assertAdmin(tenant: TenantContext): void {
+  if (!tenant.isAdmin) {
+    throw new ForbiddenException('Endpoint này chỉ dành cho ADMIN_API_KEY');
   }
 }
 
@@ -48,11 +42,12 @@ function assertScopes(tenant: TenantContext, required: string | string[] | undef
  * Plugin xác thực tenant qua API key Bearer.
  *
  * - `.resolve` inject `tenant: TenantContext` vào mọi request dùng plugin này.
- * - macro `auth` nhận `{ scope }` để guard theo capability trên từng route.
+ * - macro `auth` nhận `{ admin }` để giới hạn route cho ADMIN_API_KEY.
  * - ADMIN_API_KEY được chấp nhận như super key → ADMIN_TENANT (full quyền).
  *
- * Dùng: `.use(tenantAuthPlugin)` ở đầu route module, rồi khai báo
- * `{ auth: { scope: 'quiz:read' } }` cho từng route.
+ * Dùng: `.use(tenantAuthPlugin)` ở đầu route module, rồi khai báo `{ auth: true }`
+ * (mọi tenant key hợp lệ) hoặc `{ auth: { admin: true } }` (chỉ ADMIN_API_KEY)
+ * cho từng route.
  */
 export const tenantAuthPlugin = new Elysia({ name: 'tenant-auth' })
   .resolve(async ({ headers }) => {
@@ -70,14 +65,13 @@ export const tenantAuthPlugin = new Elysia({ name: 'tenant-auth' })
     return { tenant };
   })
   .macro({
-    auth: (config: { scope?: string | string[] } | boolean) => ({
+    auth: (config: { admin?: boolean } | boolean) => ({
       beforeHandle(ctx: { tenant?: TenantContext }) {
         if (config === false) return;
         // `.resolve` chạy trước và luôn set tenant (hoặc throw 401), nên tại đây
         // tenant chắc chắn có; guard undefined để thoả type.
         if (!ctx.tenant) throw new UnauthorizedException('Chưa xác thực tenant');
-        const scope = typeof config === 'object' ? config.scope : undefined;
-        assertScopes(ctx.tenant, scope);
+        if (typeof config === 'object' && config.admin) assertAdmin(ctx.tenant);
       }
     })
   })

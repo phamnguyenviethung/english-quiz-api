@@ -20,7 +20,6 @@ async function getTenant(id: number) {
 interface CreateTenantInput {
   name: string;
   description?: string | null;
-  scopes?: string[];
   allowAllTopics?: boolean;
   allowAllQuizTypes?: boolean;
 }
@@ -33,7 +32,6 @@ function createTenant(input: CreateTenantInput) {
 interface UpdateTenantInput {
   name?: string;
   description?: string | null;
-  scopes?: string[];
   allowAllTopics?: boolean;
   allowAllQuizTypes?: boolean;
   isActive?: boolean;
