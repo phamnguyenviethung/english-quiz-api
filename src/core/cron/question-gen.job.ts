@@ -17,6 +17,7 @@ import englishCronJobTrackingService, {
   type EnglishCronJobErrorPhase,
   type EnglishCronRunRef
 } from '@/core/services/english/englishCronJobTracking.service';
+import topicService from '@/core/services/english/topic.service';
 
 const QUEUE_NAME = 'english-question-gen';
 
@@ -222,6 +223,33 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
         };
       }
       batchCount = Math.min(Math.min(requestedCount, getPerBucketGenerationCap()), needed);
+    }
+
+    if (topicId !== null) {
+      const topic = await topicService.getTopicById(topicId);
+      if (!topic || !topic.isActive) {
+        logger.warn(
+          `[${logTag}] Topic ${topicId} no longer exists/inactive, skipping bucket engLevel=${engLevel} quizType=${quizType}`
+        );
+        await englishCronJobTrackingService.finishBucket(bucket, {
+          status: 'skipped',
+          requestedCount,
+          generatedCount: 0,
+          insertedCount: 0,
+          skippedCount: requestedCount,
+          tokenIn: 0,
+          tokenOut: 0
+        });
+        return {
+          status: 'skipped',
+          requested: requestedCount,
+          generated: 0,
+          inserted: 0,
+          skipped: requestedCount,
+          tokenIn: 0,
+          tokenOut: 0
+        };
+      }
     }
 
     const ctx: DifficultyContext = {

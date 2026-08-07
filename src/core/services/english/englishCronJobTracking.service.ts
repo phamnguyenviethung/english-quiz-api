@@ -110,8 +110,27 @@ type RunPatch = Partial<{
   durationMs: number | null;
 }>;
 
+// Drizzle (node-postgres driver) wraps failed queries in a generic
+// "Failed query: ..." message and puts the real pg error (code/constraint/
+// detail) on `.cause` — unwrap it here so it isn't silently dropped from
+// every log line and errorMessage column that goes through this function.
+function extractPgCauseInfo(cause: unknown): string | null {
+  if (!cause || typeof cause !== 'object') return null;
+  const c = cause as { code?: string; constraint?: string; table?: string; column?: string; detail?: string };
+  if (!c.code) return null;
+  const parts = [`pgCode=${c.code}`];
+  if (c.constraint) parts.push(`constraint=${c.constraint}`);
+  if (c.table) parts.push(`table=${c.table}`);
+  if (c.column) parts.push(`column=${c.column}`);
+  if (c.detail) parts.push(`detail=${c.detail}`);
+  return parts.join(' ');
+}
+
 export function normalizeError(err: unknown): { message: string; stack?: string } {
-  if (err instanceof Error) return { message: err.message, stack: err.stack };
+  if (err instanceof Error) {
+    const pgInfo = extractPgCauseInfo((err as { cause?: unknown }).cause);
+    return { message: pgInfo ? `${err.message} [${pgInfo}]` : err.message, stack: err.stack };
+  }
   return { message: String(err) };
 }
 
