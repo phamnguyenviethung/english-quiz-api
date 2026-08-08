@@ -114,6 +114,29 @@ export const ModelPricingSyncResultSchema = t.Object({
   notFound: t.Array(t.String())
 });
 
+// ── Pool bucket preview ───────────────────────────────────────────────────────
+export const PoolBucketSchema = t.Object({
+  bucketKey: t.String({ description: '`{engLevel}:{topicId|null}:{quizType}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  engLevel: t.String(),
+  quizType: t.String(),
+  optionCount: t.Number(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  currentCount: t.Number({ description: 'Số câu đang có trong bucket.' }),
+  deficiency: t.Number({ description: 'question_pool.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
+  plannedCount: t.Number({ description: 'Số câu sẽ sinh cho bucket này. 0 = bị scope bỏ qua.' })
+});
+
+export const PoolBucketPreviewSchema = t.Object({
+  buckets: t.Array(PoolBucketSchema),
+  summary: t.Object({
+    matchedBuckets: t.Number({ description: 'Số bucket khớp filter (kể cả bucket sẽ bị bỏ qua).' }),
+    plannedBuckets: t.Number(),
+    plannedQuestions: t.Number(),
+    maxPerBucket: t.Number()
+  })
+});
+
 // ── Tenant API key ───────────────────────────────────────────────────────────
 // PublicApiKey = Omit<TenantApiKey,'key'> — plaintext key không bao giờ list ra.
 export const PublicApiKeySchema = t.Object({

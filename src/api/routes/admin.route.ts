@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { ok, created, list } from '@/api/common/response';
-import { IdParam, ProviderPreferencesSchema } from '@/api/common/schemas';
+import { EngLevelSchema, IdParam, ProviderPreferencesSchema, QuizTypeSchema } from '@/api/common/schemas';
 import {
   ApiOk,
   ApiList,
@@ -10,6 +10,7 @@ import {
   AiModelSchema,
   CatalogModelSchema,
   ModelPricingSyncResultSchema,
+  PoolBucketPreviewSchema,
   PublicApiKeySchema,
   IssuedApiKeySchema,
   TenantTopicAccessSchema,
@@ -394,33 +395,80 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
   )
 
   // ── Pool ─────────────────────────────────────────────────────────────────────
+  .get('/pool/buckets', async ({ query }) => ok(await adminController.listPoolBuckets(query)), {
+    query: t.Object({
+      engLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`. Bỏ trống = mọi trình độ.' })),
+      topicIds: t.Optional(t.String({ description: 'CSV topic id, vd `3,7,12`. Bỏ trống = mọi topic đang bật.' })),
+      quizTypes: t.Optional(t.String({ description: 'CSV quizType, vd `vocab,idiom`. Bỏ trống = mọi loại đang bật.' })),
+      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
+      countPerBucket: t.Optional(t.Numeric({ minimum: 1 }))
+    }),
+    detail: {
+      tags: ['Admin / Pool'],
+      summary: 'Preview buckets for manual refill',
+      description:
+        'Liệt kê bucket khớp filter kèm số câu đang có và số câu sẽ sinh, để admin xem trước chi phí ' +
+        'trước khi gọi POST /admin/pool/refill. Nhận đúng bộ tham số `scope`/`countPerBucket`/filter như ' +
+        'endpoint refill và chạy chung một hàm plan, nên `summary.plannedBuckets` bằng đúng `totalBuckets` ' +
+        'mà refill sẽ trả về với cùng tham số. Bucket có `plannedCount = 0` là bucket đã đủ câu và sẽ bị ' +
+        `bỏ qua ở scope hiện tại. Chỉ đọc, không sinh câu, không tốn chi phí LLM. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(PoolBucketPreviewSchema),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+
   .post('/pool/refill', async ({ body }) => ok(await adminController.triggerManualPoolRefill(body)), {
     body: t.Object({
-      model: t.Optional(
-        t.String({
+      models: t.Optional(
+        t.Array(t.String(), {
           description:
-            'OpenRouter model id. Bỏ trống → chọn ngẫu nhiên trong các model đang bật `manualEnabled`. ' +
-            'Provider routing luôn lấy theo `manualProvider` của model được dùng.'
+            'Danh sách OpenRouter model id. Mỗi bucket chọn ngẫu nhiên 1 model trong danh sách này. ' +
+            'Bỏ trống → chọn ngẫu nhiên trong mọi model đang bật `manualEnabled`. Model không tồn tại ' +
+            'hoặc đang tắt (`isActive=false` / `manualEnabled=false`) trả 400. Provider routing luôn ' +
+            'lấy theo `manualProvider` của model được dùng.'
         })
       ),
+      model: t.Optional(t.String({ description: 'DEPRECATED: dùng `models`. Tương đương `models: [model]`.' })),
       countPerBucket: t.Optional(
         t.Integer({
           minimum: 1,
           description: 'Số câu ép sinh cho mỗi bucket. Mặc định question_pool.manualFillDefaultCount.'
         })
       ),
-      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')]))
+      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
+      filter: t.Optional(
+        t.Object(
+          {
+            engLevels: t.Optional(t.Array(EngLevelSchema)),
+            topicIds: t.Optional(t.Array(t.Integer())),
+            quizTypes: t.Optional(t.Array(QuizTypeSchema))
+          },
+          { description: 'Thu hẹp không gian bucket. Chiều nào bỏ trống thì không lọc theo chiều đó.' }
+        )
+      ),
+      bucketKeys: t.Optional(
+        t.Array(t.String(), {
+          description:
+            'Chốt đúng danh sách bucketKey (lấy từ GET /admin/pool/buckets), áp dụng sau `filter`. ' +
+            'Dùng khi admin bỏ tick một vài bucket trong preview.'
+        })
+      )
     }),
     detail: {
       tags: ['Admin / Pool'],
-      summary: 'Trigger full manual pool refill',
+      summary: 'Trigger manual pool refill',
       description:
-        'Fill toàn bộ bucket (engLevel × topic × quizType) bất kể pool đã đầy hay chưa (`scope=all`, mặc định — ' +
+        'Fill bucket (engLevel × topic × quizType) bất kể pool đã đầy hay chưa (`scope=all`, mặc định — ' +
         'ép đúng `countPerBucket` câu mỗi bucket) hoặc chỉ bucket thiếu (`scope=deficient` — top-up phần còn ' +
-        'thiếu tới `question_pool.maxPerBucket`, hoặc đúng `countPerBucket` nếu truyền). Chạy in-process ' +
-        '(không qua BullMQ), bounded concurrency theo `question_pool.manualFillConcurrency`. Bỏ qua ' +
-        '`job_flags.poolRefillMaxQuestionsPerRun` — đây là hành động admin chủ động, không bị budget tự động ' +
-        'giới hạn. Trả ngay `{ runId, totalBuckets }`, theo dõi tiến độ qua GET /english/cron/runs/:runId ' +
+        'thiếu tới `question_pool.maxPerBucket`, hoặc đúng `countPerBucket` nếu truyền). Không truyền ' +
+        '`filter`/`bucketKeys` → chạy toàn bộ bucket như trước. Chạy in-process (không qua BullMQ), bounded ' +
+        'concurrency theo `question_pool.manualFillConcurrency`. Bỏ qua `job_flags.poolRefillMaxQuestionsPerRun` ' +
+        '— đây là hành động admin chủ động, không bị budget tự động giới hạn. Trả ngay `{ runId, totalBuckets }` ' +
+        '(`totalBuckets` = số bucket thực sự được xếp lịch), theo dõi tiến độ qua GET /english/cron/runs/:runId ' +
         `(admin key cũng gọi được route đó). ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },

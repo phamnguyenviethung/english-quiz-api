@@ -121,6 +121,25 @@ async function listPoolModels(): Promise<PoolModelStat[]> {
   return rows.map((row) => ({ model: row.model, count: row.total }));
 }
 
+/**
+ * Count của MỌI bucket trong 1 query, key = `${engLevel}:${topicId ?? 'null'}:${quizType}`
+ * (khớp bucketKeyOf ở poolRefill.service). Dùng cho scan bucket — gọi getPoolCount lần lượt
+ * cho từng bucket là hàng nghìn round-trip khi số topic lớn.
+ */
+async function getPoolCountsByBucket(): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      engLevel: englishQuestionPool.engLevel,
+      quizType: englishQuestionPool.quizType,
+      topicId: englishQuestionPool.topicId,
+      total: count()
+    })
+    .from(englishQuestionPool)
+    .groupBy(englishQuestionPool.engLevel, englishQuestionPool.quizType, englishQuestionPool.topicId);
+
+  return new Map(rows.map((row) => [`${row.engLevel}:${row.topicId ?? 'null'}:${row.quizType}`, row.total]));
+}
+
 async function getPoolCount(engLevel: string, quizType: QuizType, topicId: number | null = null): Promise<number> {
   const [result] = await db
     .select({ total: count() })
@@ -334,6 +353,7 @@ async function clearPool(engLevel?: string, topicId?: number | null): Promise<vo
 
 export default {
   getPoolCount,
+  getPoolCountsByBucket,
   popQuestion,
   listQuestions,
   listPoolModels,

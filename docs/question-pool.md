@@ -18,11 +18,11 @@ GET /english/pool/pop?engLevel=A2&topicId=5
 
 Pool được nạp đầy bởi 3 cơ chế, tất cả dùng chung 1 engine (`src/core/services/english/poolRefill.service.ts`):
 
-| Cơ chế        | Trigger                                         | Scope bucket                                           | Target check                                  | Thực thi                        |
-| ------------- | ----------------------------------------------- | ------------------------------------------------------ | --------------------------------------------- | ------------------------------- |
-| **On-demand** | `POST /english/pool/fill` (chỉ `ADMIN_API_KEY`) | 1 bucket cụ thể                                        | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
-| **Scheduled** | cron (`pool_refill_schedule`)                   | tất cả bucket thiếu                                    | `target` — `< maxPerBucket`                   | BullMQ flow                     |
-| **Manual**    | `POST /admin/pool/refill`                       | tất cả bucket (`scope=all` mặc định, hoặc `deficient`) | không lọc (`all`) hoặc `target` (`deficient`) | In-process, bounded concurrency |
+| Cơ chế        | Trigger                                         | Scope bucket                                                                                | Target check                                  | Thực thi                        |
+| ------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------- |
+| **On-demand** | `POST /english/pool/fill` (chỉ `ADMIN_API_KEY`) | 1 bucket cụ thể                                                                             | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
+| **Scheduled** | cron (`pool_refill_schedule`)                   | tất cả bucket thiếu                                                                         | `target` — `< maxPerBucket`                   | BullMQ flow                     |
+| **Manual**    | `POST /admin/pool/refill`                       | mặc định tất cả bucket (`scope=all`, hoặc `deficient`), lọc được theo `filter`/`bucketKeys` | không lọc (`all`) hoặc `target` (`deficient`) | In-process, bounded concurrency |
 
 On-demand là backstop nhẹ cho quiz serving (pop-miss) — giữ nguyên ngưỡng ratio, không đổi. Scheduled + manual đều ưu tiên đạt đúng `maxPerBucket`, khác nhau ở việc có bị giới hạn `job_flags.poolRefillMaxQuestionsPerRun` hay không (scheduled có, manual admin không — xem "Manual Fill" bên dưới).
 
@@ -227,13 +227,18 @@ interface QuestionGenJobData {
 
 Toàn bộ logic "cần refill gì, refill bao nhiêu, refill bằng cách nào" nằm ở đây, dùng chung cho cả 3 cơ chế:
 
-| Function                                                      | Vai trò                                                                                                       |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `scanBuckets({ scope, thresholdCheck })`                      | Quét `topic × engLevel × quizType`, trả candidate list đã sort (xem "Chống đói bucket" bên dưới)              |
-| `buildRefillPlan(candidates, opts)`                           | Hàm thuần — cắt candidate list theo budget (`maxQuestionsPerRun`) + cap per-bucket (`perBucketCap`), trả plan |
-| `runScheduledRefill(flowProducer, trigger)`                   | `scope=deficient, thresholdCheck=target`, có budget, build BullMQ flow                                        |
-| `runOnDemandRefill(bucket)`                                   | 1 bucket, `thresholdCheck=ratio`, enqueue 1 job — hành vi giữ nguyên như bản cũ                               |
-| `runManualRefill({ model, provider, countPerBucket, scope })` | `scope=all` mặc định, không giới hạn budget, chạy in-process bounded concurrency                              |
+| Function                                                                 | Vai trò                                                                                                       |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `scanBuckets({ scope, thresholdCheck, filter, bucketKeys })`             | Quét `topic × engLevel × quizType`, trả candidate list đã sort (xem "Chống đói bucket" bên dưới)              |
+| `buildRefillPlan(candidates, opts)`                                      | Hàm thuần — cắt candidate list theo budget (`maxQuestionsPerRun`) + cap per-bucket (`perBucketCap`), trả plan |
+| `buildManualRefillPlan(params)`                                          | Scan + plan cho manual fill, trả `{ matched, plan }` — dùng chung cho preview lẫn lúc chạy thật               |
+| `runScheduledRefill(flowProducer, trigger)`                              | `scope=deficient, thresholdCheck=target`, có budget, build BullMQ flow                                        |
+| `runOnDemandRefill(bucket)`                                              | 1 bucket, `thresholdCheck=ratio`, enqueue 1 job — hành vi giữ nguyên như bản cũ                               |
+| `runManualRefill({ models, countPerBucket, scope, filter, bucketKeys })` | `scope=all` mặc định, không giới hạn budget, chạy in-process bounded concurrency                              |
+
+**Lọc bucket**: `filter` thu hẹp không gian bucket theo từng chiều (`engLevels` / `topicIds` / `quizTypes`); chiều nào bỏ trống thì không lọc theo chiều đó. `bucketKeys` chốt đúng một danh sách bucketKey cụ thể và được áp dụng **sau** `filter` — dùng khi admin bỏ tick vài bucket trong màn preview của dashboard. Cả hai bỏ trống → quét toàn bộ như trước.
+
+**Count bucket**: `scanBuckets` lấy count của mọi bucket bằng **một** query `GROUP BY engLevel, quizType, topicId` (`questionPoolService.getPoolCountsByBucket`), không gọi `getPoolCount` lần lượt cho từng bucket — số bucket là `topics × 4 × quizTypes` nên cách cũ tạo hàng nghìn round-trip mỗi lần scan.
 
 **Chống đói bucket (starvation fix)**: `scanBuckets` sort theo `(deficiency giảm dần, lần refill thành công gần nhất tăng dần — null trước, bucketKey tăng dần)`. Tiêu chí thứ 2 lấy từ `MAX(finishedAt)` trên `english_cron_job_buckets` (không cần cột/bảng mới) — đảm bảo khi 1 lần chạy bị budget-cap giữa chừng, lần chạy sau **ưu tiên đúng những bucket bị bỏ sót lần trước**, thay vì luôn quét theo thứ tự cố định topic → engLevel → quizType và làm đói mãi mãi các bucket cuối danh sách.
 
@@ -260,7 +265,8 @@ Model không còn hardcode. Nguồn sự thật là bảng `ai_models` (CRUD qua
 | `'manual'`   | `POST /admin/pool/refill`                                             | `manualEnabled`   |
 
 - `pickStudyModelForContext(context)` — random uniform trong pool đã lọc; pool rỗng → fallback về `MODELS` hardcode (không kèm provider). `NODE_ENV=development` luôn ghim `GEMINI_FLASH_LITE`.
-- `resolveStudyModel(context, explicitModelId?)` — có chỉ định model thì vẫn **lấy provider routing của chính model đó** theo context, không bỏ qua config.
+- `resolveStudyModel(context, explicitModelId?)` — có chỉ định model thì vẫn **lấy provider routing của chính model đó** theo context, không bỏ qua config. Không validate model id (cho phép override chủ ý sang model chưa khai báo).
+- `resolveStudyModels(context, modelIds?)` — bản nhiều model, dùng cho manual refill: trả cả tập để caller random lại ở từng bucket. Bỏ trống → toàn bộ pool của context. Khác bản số ít, hàm này **validate**: id không có trong `ai_models`, `isActive=false`, hoặc tắt cờ của context → `BusinessLogicException` (400) liệt kê rõ id nào sai, vì input đến từ dropdown admin.
 
 **Giá & cost**: giá được nạp tự động lúc tạo model (và khi đổi `modelId`), refresh thủ công qua `POST /admin/models/:id/sync` hoặc `POST /admin/models/sync-all`. Duyệt catalog thật của OpenRouter qua `GET /admin/models/catalog?search=`. Model có suffix routing (`:nitro`, `:floor`) được so khớp với bản đã bỏ suffix trên catalog.
 
@@ -331,15 +337,28 @@ Parent job (pool-refill-scan)
 
 ## Manual Fill
 
-`POST /admin/pool/refill` — yêu cầu `ADMIN_API_KEY` (không phải tenant key), gọi `poolRefillService.runManualRefill({ model, provider, countPerBucket, scope })`.
+`POST /admin/pool/refill` — yêu cầu `ADMIN_API_KEY` (không phải tenant key), gọi `poolRefillService.runManualRefill({ models, countPerBucket, scope, filter, bucketKeys })`.
 
 - Không dùng BullMQ — chạy in-process bằng `runWithConcurrency`, concurrency = `question_pool.manualFillConcurrency`.
-- `model` bỏ trống → random trong các model bật `manualEnabled`; truyền tường minh → vẫn dùng `manualProvider` của model đó. Cả run dùng chung 1 model (khác scheduled refill: mỗi child job tự chọn lại).
+- `models` bỏ trống → random trong mọi model bật `manualEnabled`; truyền tường minh → random trong đúng tập đó. **Random lại ở từng bucket**, không khoá cứng cả run vào 1 model, nên một lần refill trải đều trên các model admin chọn. `manualProvider` luôn lấy theo model được chọn cho bucket đó. Model không tồn tại trong `ai_models`, hoặc `isActive=false` / `manualEnabled=false` → 400 (`resolveStudyModels` ở `aiClient.config.ts`); khác `resolveStudyModel` không validate, vì ở đây id đến từ dropdown admin nên id lạ là lỗi nhập liệu chứ không phải override có chủ ý.
+- `model` (số ít) vẫn nhận được, tương đương `models: [model]` — giữ cho client cũ.
 - `scope: 'all'` (mặc định): scan toàn bộ bucket bất kể đầy/thiếu, force mỗi bucket đúng `countPerBucket` câu (mặc định `question_pool.manualFillDefaultCount` nếu không truyền) — tương đương `skipPoolCheck = true` của bản cũ.
 - `scope: 'deficient'`: chỉ scan bucket còn thiếu, top-up đúng phần còn thiếu tới `maxPerBucket` (hoặc `countPerBucket` nếu truyền tường minh).
+- `filter` / `bucketKeys`: thu hẹp tập bucket (xem "Lọc bucket" ở mục `poolRefill.service.ts`).
 - **Không bị giới hạn** `job_flags.poolRefillMaxQuestionsPerRun` — đây là hành động admin chủ động, chấp nhận chi phí, khác với scheduled refill (có budget tự động).
 - Chống double-run bằng `activeManualRuns` set (module state trong `poolRefill.service.ts`).
-- Fire-and-forget: trả `{ runId, totalBuckets }` ngay, job chạy nền và tự `summarizeRun`. Theo dõi tiến độ qua `GET /english/cron/runs/:runId` (admin key cũng gọi được endpoint này nhờ `ADMIN_TENANT` bypass ở `tenantAuth.plugin.ts`).
+- Fire-and-forget: trả `{ runId, totalBuckets }` ngay (`totalBuckets` = số bucket thực sự được xếp lịch), job chạy nền và tự `summarizeRun`. Theo dõi tiến độ qua `GET /english/cron/runs/:runId` (admin key cũng gọi được endpoint này nhờ `ADMIN_TENANT` bypass ở `tenantAuth.plugin.ts`).
+
+### Preview trước khi chạy
+
+`GET /admin/pool/buckets` — chỉ đọc, không sinh câu, không tốn chi phí LLM. Nhận đúng bộ tham số `scope` / `countPerBucket` / filter như endpoint refill (filter dạng CSV: `?engLevels=A1,B2&topicIds=3,7&quizTypes=vocab`) và chạy chung `buildManualRefillPlan`, nên `summary.plannedBuckets` bằng đúng `totalBuckets` mà refill sẽ trả về với cùng tham số — preview không trôi khỏi thực tế.
+
+Trả `{ buckets, summary }`:
+
+- `buckets[]`: mọi bucket khớp filter, kèm `bucketKey`, `currentCount`, `deficiency`, và `plannedCount` = số câu sẽ sinh. `plannedCount = 0` nghĩa là bucket đã đủ câu và sẽ bị `scope=deficient` bỏ qua — trả về thay vì giấu, để UI nói được lý do.
+- `summary`: `matchedBuckets` (khớp filter), `plannedBuckets`, `plannedQuestions`, `maxPerBucket`.
+
+Dashboard dùng endpoint này cho màn refill: admin lọc chiều → thấy ngay số bucket và số câu sẽ sinh → bỏ tick bucket không cần → gửi `bucketKeys` còn lại sang `POST /admin/pool/refill`.
 
 ## Monitor
 

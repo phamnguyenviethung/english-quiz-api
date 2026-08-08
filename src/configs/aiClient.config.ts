@@ -3,6 +3,7 @@ import { z } from 'zod';
 import _ from 'lodash';
 import logger from '@/configs/logger.config';
 import aiModelService from '@/core/services/ai/aiModel.service';
+import { BusinessLogicException } from '@/core/exceptions';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -74,6 +75,50 @@ export async function resolveStudyModel(context: ModelContext, explicitModelId?:
     model: explicitModelId,
     provider: (context === 'schedule' ? row?.scheduleProvider : row?.manualProvider) ?? undefined
   };
+}
+
+/**
+ * Bản nhiều model của resolveStudyModel — caller sẽ random trong tập trả về (mỗi bucket một
+ * model) thay vì khoá cứng 1 model cho cả lần chạy. Không truyền id → toàn bộ pool của context.
+ *
+ * Khác resolveStudyModel: ở đây id đến từ dropdown admin nên id lạ / model đã tắt là lỗi nhập
+ * liệu, không phải override có chủ ý → chặn sớm bằng 400 thay vì để OpenRouter trả lỗi giữa run.
+ */
+export async function resolveStudyModels(context: ModelContext, modelIds?: string[]): Promise<ResolvedStudyModel[]> {
+  const requested = _.uniq(modelIds?.filter((id) => id.trim().length > 0) ?? []);
+  if (requested.length === 0) return getStudyModelsForContext(context);
+
+  const rows = await Promise.all(requested.map((id) => aiModelService.getModelByModelId(id)));
+
+  const unknown: string[] = [];
+  const disabled: string[] = [];
+  const resolved: ResolvedStudyModel[] = [];
+
+  for (const [index, row] of rows.entries()) {
+    const modelId = requested[index]!;
+    if (!row) {
+      unknown.push(modelId);
+      continue;
+    }
+    if (!row.isActive || !(context === 'schedule' ? row.scheduleEnabled : row.manualEnabled)) {
+      disabled.push(modelId);
+      continue;
+    }
+    resolved.push({
+      model: row.modelId,
+      provider: (context === 'schedule' ? row.scheduleProvider : row.manualProvider) ?? undefined
+    });
+  }
+
+  if (unknown.length > 0 || disabled.length > 0) {
+    const parts = [
+      unknown.length > 0 ? `không tồn tại trong ai_models: ${unknown.join(', ')}` : null,
+      disabled.length > 0 ? `đang tắt cho context "${context}": ${disabled.join(', ')}` : null
+    ].filter((part): part is string => part !== null);
+    throw new BusinessLogicException(`Model không dùng được (${parts.join('; ')})`);
+  }
+
+  return resolved;
 }
 
 interface StructuredOutputRequest {

@@ -5,7 +5,12 @@ import apiKeyService from '@/core/services/tenant/apiKey.service';
 import poolRefillService from '@/core/services/english/poolRefill.service';
 import aiModelService from '@/core/services/ai/aiModel.service';
 import openrouterCatalogService from '@/core/services/ai/openrouterCatalog.service';
-import { resolveStudyModel } from '@/configs/aiClient.config';
+import { resolveStudyModels } from '@/configs/aiClient.config';
+import { bucketKeyOf, type BucketFilter } from '@/core/services/english/poolRefill.service';
+import { ENG_LEVELS, QUIZ_TYPES, type QuizType } from '@/core/services/english/questionTypes';
+import questionPoolService from '@/core/services/english/questionPool.service';
+import { BusinessLogicException } from '@/core/exceptions';
+import type { DifficultyContext } from '@/core/services/english/study.service';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
 // ─── Tenants ────────────────────────────────────────────────────────────────────
@@ -145,24 +150,127 @@ async function setQuizTypeAccess(tenantId: number, quizTypes: string[]) {
 
 // ─── Pool ───────────────────────────────────────────────────────────────────────
 
+interface PoolBucketFilterInput {
+  engLevels?: string[];
+  topicIds?: number[];
+  quizTypes?: string[];
+}
+
 interface TriggerManualPoolRefillInput {
+  models?: string[];
+  /** @deprecated Dùng `models`. Giữ lại cho client cũ. */
   model?: string;
   countPerBucket?: number;
   scope?: 'all' | 'deficient';
+  filter?: PoolBucketFilterInput;
+  bucketKeys?: string[];
+}
+
+// Query của GET /admin/pool/buckets truyền list dạng "A1,B2" nên phải parse ở đây;
+// body của POST /admin/pool/refill đã là array và được TypeBox validate sẵn.
+function parseCsvParam(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const parts = value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  return parts.length > 0 ? parts : undefined;
+}
+
+function toBucketFilter(input: PoolBucketFilterInput | undefined): BucketFilter | undefined {
+  if (!input) return undefined;
+
+  const invalidLevels = input.engLevels?.filter((level) => !ENG_LEVELS.includes(level as never)) ?? [];
+  if (invalidLevels.length > 0) throw new BusinessLogicException(`engLevel không hợp lệ: ${invalidLevels.join(', ')}`);
+
+  const invalidQuizTypes = input.quizTypes?.filter((quizType) => !QUIZ_TYPES.includes(quizType as never)) ?? [];
+  if (invalidQuizTypes.length > 0)
+    throw new BusinessLogicException(`quizType không hợp lệ: ${invalidQuizTypes.join(', ')}`);
+
+  const invalidTopicIds = input.topicIds?.filter((id) => !Number.isInteger(id)) ?? [];
+  if (invalidTopicIds.length > 0)
+    throw new BusinessLogicException(`topicId không hợp lệ: ${invalidTopicIds.join(', ')}`);
+
+  const filter: BucketFilter = {
+    engLevels: input.engLevels as DifficultyContext['engLevel'][] | undefined,
+    topicIds: input.topicIds,
+    quizTypes: input.quizTypes as QuizType[] | undefined
+  };
+
+  const hasAny = Object.values(filter).some((values) => values !== undefined && values.length > 0);
+  return hasAny ? filter : undefined;
+}
+
+interface ListPoolBucketsQuery {
+  engLevels?: string;
+  topicIds?: string;
+  quizTypes?: string;
+  scope?: 'all' | 'deficient';
+  countPerBucket?: number;
+}
+
+/**
+ * Preview: bucket nào sẽ được refill với đúng bộ tham số này, và mỗi bucket sinh bao nhiêu câu.
+ * Dùng chung buildManualRefillPlan với endpoint chạy thật nên số liệu preview không lệch.
+ */
+async function listPoolBuckets(query: ListPoolBucketsQuery) {
+  const topicIds = parseCsvParam(query.topicIds)?.map((id) => Number(id));
+  const filter = toBucketFilter({
+    engLevels: parseCsvParam(query.engLevels),
+    quizTypes: parseCsvParam(query.quizTypes),
+    topicIds
+  });
+
+  const { matched, plan } = await poolRefillService.buildManualRefillPlan({
+    scope: query.scope,
+    countPerBucket: query.countPerBucket,
+    filter
+  });
+
+  const plannedByKey = new Map(plan.planned.map((item) => [bucketKeyOf(item), item.count]));
+
+  return {
+    // Trả cả bucket plannedCount=0 (đã đủ câu, bị scope='deficient' bỏ qua) để UI nói được lý do
+    // thay vì lặng lẽ giấu bucket đi.
+    buckets: matched.map((candidate) => ({
+      bucketKey: bucketKeyOf(candidate),
+      engLevel: candidate.engLevel,
+      quizType: candidate.quizType,
+      optionCount: candidate.optionCount,
+      topicId: candidate.topicId,
+      topicName: candidate.topicName,
+      currentCount: candidate.currentCount,
+      deficiency: candidate.deficiency,
+      plannedCount: plannedByKey.get(bucketKeyOf(candidate)) ?? 0
+    })),
+    summary: {
+      matchedBuckets: matched.length,
+      plannedBuckets: plan.planned.length,
+      plannedQuestions: plan.planned.reduce((sum, item) => sum + item.count, 0),
+      maxPerBucket: questionPoolService.getMaxPoolSize()
+    }
+  };
 }
 
 async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
-  // Không truyền model → random trong pool model bật manualEnabled; có truyền →
-  // vẫn lấy manualProvider của chính model đó.
-  const { model, provider } = await resolveStudyModel('manual', input.model);
+  // Không truyền model nào → random trong toàn bộ pool model bật manualEnabled (hành vi cũ);
+  // có truyền → validate rồi random trong đúng tập đó, mỗi bucket một model.
+  const requestedModels = input.models ?? (input.model ? [input.model] : undefined);
+  const models = await resolveStudyModels('manual', requestedModels);
+  const filter = toBucketFilter(input.filter);
+
   logger.info(
-    `[Admin] Manual pool refill scope=${input.scope ?? 'all'} model=${model} countPerBucket=${input.countPerBucket ?? '-'}`
+    `[Admin] Manual pool refill scope=${input.scope ?? 'all'} models=${models.map((m) => m.model).join(',')} ` +
+      `countPerBucket=${input.countPerBucket ?? '-'} filter=${filter ? JSON.stringify(filter) : '-'} ` +
+      `selectedBuckets=${input.bucketKeys?.length ?? '-'}`
   );
+
   return poolRefillService.runManualRefill({
-    model,
-    provider,
+    models,
     countPerBucket: input.countPerBucket,
-    scope: input.scope
+    scope: input.scope,
+    filter,
+    bucketKeys: input.bucketKeys
   });
 }
 
@@ -185,5 +293,6 @@ export default {
   getQuizTypeAccess,
   setTopicAccess,
   setQuizTypeAccess,
+  listPoolBuckets,
   triggerManualPoolRefill
 };

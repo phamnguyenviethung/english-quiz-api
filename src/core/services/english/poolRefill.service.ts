@@ -1,11 +1,12 @@
 import type { FlowProducer } from 'bullmq';
+import _ from 'lodash';
 import logger from '@/configs/logger.config';
+import type { ResolvedStudyModel } from '@/configs/aiClient.config';
 import { fillBucketDetailed, getQuestionGenQueue, type QuestionGenJobData } from '@/core/cron/question-gen.job';
 import questionPoolService, { getMaxPoolSize, getPerBucketGenerationCap } from './questionPool.service';
 import topicService from './topic.service';
 import type { QuizType } from './questionTypes';
 import type { DifficultyContext } from './study.service';
-import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
 import englishCronJobTrackingService, {
   normalizeError,
@@ -32,7 +33,7 @@ function getEnabledQuizTypes(): QuizType[] {
     .map((item) => item.quizType as QuizType);
 }
 
-function bucketKeyOf(input: { engLevel: string; topicId: number | null; quizType: string }): string {
+export function bucketKeyOf(input: { engLevel: string; topicId: number | null; quizType: string }): string {
   return `${input.engLevel}:${input.topicId ?? 'null'}:${input.quizType}`;
 }
 
@@ -48,11 +49,38 @@ export interface RefillBucketCandidate {
   deficiency: number;
 }
 
+// Thu hẹp không gian bucket theo từng chiều. Mảng rỗng/undefined = không lọc chiều đó.
+export interface BucketFilter {
+  engLevels?: DifficultyContext['engLevel'][];
+  topicIds?: number[];
+  quizTypes?: QuizType[];
+}
+
 export interface ScanBucketsOptions {
   // 'all' = mọi bucket (target/threshold không lọc, dùng cho manual force-fill).
   // 'deficient' = chỉ bucket dưới ngưỡng (target hoặc ratio, xem thresholdCheck).
   scope: 'deficient' | 'all';
   thresholdCheck?: 'target' | 'ratio';
+  filter?: BucketFilter;
+  // Chốt danh sách bucket cụ thể (admin bỏ tick từng bucket ở UI), áp dụng sau filter.
+  bucketKeys?: string[];
+}
+
+function hasFilterValues<T>(values: T[] | undefined): values is T[] {
+  return values !== undefined && values.length > 0;
+}
+
+/**
+ * Predicate "bucket còn thiếu" của scope='deficient'. Export vì endpoint preview cần chia
+ * đúng ranh giới này trên tập bucket đã scan sẵn, không được suy diễn lại một bản khác.
+ */
+export function isBucketDeficient(
+  candidate: Pick<RefillBucketCandidate, 'currentCount'>,
+  thresholdCheck?: 'target' | 'ratio'
+): boolean {
+  return thresholdCheck === 'ratio'
+    ? candidate.currentCount < questionPoolService.getRefillThreshold()
+    : candidate.currentCount < getMaxPoolSize();
 }
 
 /**
@@ -70,13 +98,25 @@ export async function scanBuckets(options: ScanBucketsOptions): Promise<RefillBu
   const topics = await topicService.getAllActiveTopics();
   const maxPool = getMaxPoolSize();
   const quizTypes = getEnabledQuizTypes();
-  const threshold = questionPoolService.getRefillThreshold();
+  const countsByBucket = await questionPoolService.getPoolCountsByBucket();
+
+  const filter = options.filter;
+  const engLevelFilter = hasFilterValues(filter?.engLevels) ? new Set(filter.engLevels) : null;
+  const topicIdFilter = hasFilterValues(filter?.topicIds) ? new Set(filter.topicIds) : null;
+  const quizTypeFilter = hasFilterValues(filter?.quizTypes) ? new Set(filter.quizTypes) : null;
+  const bucketKeyFilter = hasFilterValues(options.bucketKeys) ? new Set(options.bucketKeys) : null;
 
   const all: RefillBucketCandidate[] = [];
   for (const topic of topics) {
+    if (topicIdFilter && !topicIdFilter.has(topic.id)) continue;
     for (const engLevel of ENG_LEVELS) {
+      if (engLevelFilter && !engLevelFilter.has(engLevel)) continue;
       for (const quizType of quizTypes) {
-        const currentCount = await questionPoolService.getPoolCount(engLevel, quizType, topic.id);
+        if (quizTypeFilter && !quizTypeFilter.has(quizType)) continue;
+        const bucketKey = bucketKeyOf({ engLevel, topicId: topic.id, quizType });
+        if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
+
+        const currentCount = countsByBucket.get(bucketKey) ?? 0;
         all.push({
           engLevel,
           quizType,
@@ -90,10 +130,7 @@ export async function scanBuckets(options: ScanBucketsOptions): Promise<RefillBu
     }
   }
 
-  const filtered =
-    options.scope === 'all'
-      ? all
-      : all.filter((b) => (options.thresholdCheck === 'ratio' ? b.currentCount < threshold : b.currentCount < maxPool));
+  const filtered = options.scope === 'all' ? all : all.filter((b) => isBucketDeficient(b, options.thresholdCheck));
 
   if (filtered.length === 0) return filtered;
 
@@ -222,7 +259,7 @@ async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number)
 async function executeManualPlanInProcess(
   plan: RefillPlanResult,
   run: EnglishCronRunRef | null,
-  opts: { model: string; provider?: ProviderPreferencesJson; concurrency: number }
+  opts: { models: ResolvedStudyModel[]; concurrency: number }
 ): Promise<void> {
   const runKey = run?.runId ?? `untracked-${Date.now()}`;
   if (activeManualRuns.has(runKey)) {
@@ -238,8 +275,13 @@ async function executeManualPlanInProcess(
   }
 
   try {
-    logger.info(`[${LOG_TAG}] Manual refill start runId=${runKey} model=${opts.model} buckets=${plan.planned.length}`);
+    logger.info(
+      `[${LOG_TAG}] Manual refill start runId=${runKey} models=${opts.models.map((m) => m.model).join(',')} buckets=${plan.planned.length}`
+    );
     const tasks = plan.planned.map((item) => async () => {
+      // Random từng bucket (không phải từng run) để một lần refill trải đều trên các model
+      // admin đã chọn, thay vì khoá cứng cả run vào một model.
+      const picked = _.sample(opts.models)!;
       await fillBucketDetailed({
         engLevel: item.engLevel,
         quizType: item.quizType,
@@ -247,12 +289,12 @@ async function executeManualPlanInProcess(
         topicId: item.topicId,
         topicName: item.topicName,
         count: item.count,
-        model: opts.model,
-        provider: opts.provider,
+        model: picked.model,
+        provider: picked.provider,
         skipPoolCheck: true,
         logTag: LOG_TAG,
         trackingRun: run,
-        trackingMetadata: { source: 'admin_manual', model: opts.model }
+        trackingMetadata: { source: 'admin_manual', model: picked.model }
       });
     });
 
@@ -389,11 +431,53 @@ export async function runOnDemandRefill(input: OnDemandRefillInput): Promise<{ e
   }
 }
 
-export interface ManualRefillParams {
-  model: string;
-  provider?: ProviderPreferencesJson;
+export interface ManualRefillScopeParams {
   countPerBucket?: number;
   scope?: 'all' | 'deficient';
+  filter?: BucketFilter;
+  bucketKeys?: string[];
+}
+
+export interface ManualRefillParams extends ManualRefillScopeParams {
+  models: ResolvedStudyModel[];
+}
+
+export interface ManualRefillPlanResult {
+  // Mọi bucket khớp filter, KỂ CẢ bucket sẽ bị scope='deficient' bỏ qua. Preview cần tập này
+  // để nói được "bucket đã đủ câu, bỏ qua" thay vì lặng lẽ giấu bucket đi.
+  matched: RefillBucketCandidate[];
+  plan: RefillPlanResult;
+}
+
+/**
+ * Plan mà một lần manual refill sẽ chạy với đúng bộ tham số này. Tách riêng để endpoint
+ * preview (`GET /admin/pool/buckets`) và endpoint chạy thật dùng chung một đường tính toán —
+ * nếu tách đôi, con số admin thấy trước khi bấm sẽ trôi khỏi con số thực tế.
+ */
+export async function buildManualRefillPlan(params: ManualRefillScopeParams): Promise<ManualRefillPlanResult> {
+  const scope = params.scope ?? 'all';
+  const forceCount =
+    params.countPerBucket ??
+    (scope === 'all' ? getEnglishConfigSnapshot().question_pool.manualFillDefaultCount : undefined);
+
+  // Scan scope='all' rồi tự lọc, thay vì scan 2 lần: preview cần cả tập matched lẫn tập
+  // được plan, và scanBuckets là phần đắt nhất (query + sort chống đói).
+  const matched = await scanBuckets({
+    scope: 'all',
+    thresholdCheck: 'target',
+    filter: params.filter,
+    bucketKeys: params.bucketKeys
+  });
+
+  const candidates = scope === 'all' ? matched : matched.filter((b) => isBucketDeficient(b, 'target'));
+
+  const plan = buildRefillPlan(candidates, {
+    maxQuestionsPerRun: null,
+    perBucketCap: getPerBucketGenerationCap(),
+    forceCount
+  });
+
+  return { matched, plan };
 }
 
 // Refill toàn bộ (hoặc chỉ bucket thiếu) in-process, chạy nền — dùng cho admin
@@ -405,28 +489,24 @@ export async function runManualRefill(
   params: ManualRefillParams
 ): Promise<{ runId: string | null; totalBuckets: number }> {
   const scope = params.scope ?? 'all';
-  const forceCount =
-    params.countPerBucket ??
-    (scope === 'all' ? getEnglishConfigSnapshot().question_pool.manualFillDefaultCount : undefined);
-
-  const candidates = await scanBuckets({ scope, thresholdCheck: 'target' });
-  const plan = buildRefillPlan(candidates, {
-    maxQuestionsPerRun: null,
-    perBucketCap: getPerBucketGenerationCap(),
-    forceCount
-  });
+  const { plan } = await buildManualRefillPlan(params);
 
   const run = await englishCronJobTrackingService.startRun({
     jobKey: 'manual_fill',
     trigger: 'manual',
     totalBuckets: plan.totalBuckets,
     deficientBuckets: plan.planned.length,
-    metadata: { model: params.model, countPerBucket: params.countPerBucket, scope }
+    metadata: {
+      models: params.models.map((m) => m.model),
+      countPerBucket: params.countPerBucket,
+      scope,
+      filter: params.filter,
+      selectedBuckets: params.bucketKeys?.length
+    }
   });
 
   void executeManualPlanInProcess(plan, run, {
-    model: params.model,
-    provider: params.provider,
+    models: params.models,
     concurrency: getEnglishConfigSnapshot().question_pool.manualFillConcurrency
   });
 
@@ -436,6 +516,7 @@ export async function runManualRefill(
 export default {
   scanBuckets,
   buildRefillPlan,
+  buildManualRefillPlan,
   runScheduledRefill,
   runOnDemandRefill,
   runManualRefill
