@@ -212,7 +212,7 @@ interface QuestionGenJobData {
 
 1. Đếm **tổng câu** trong bucket `(engLevel, topicId, quizType)` — nếu đã đủ `maxPool` → skip.
 2. `needed = maxPool - currentCount`; `batchCount = min(requestedCount, needed)` với `requestedCount = clamp(count, 1, question_pool.perBucketGenerationCap)` (config, mặc định 5).
-3. Gọi **`generateBatch`** cho đúng `quizType` với model duy nhất (`ctx.model = GEMINI_FLASH_LITE`). AI call fail → throw ngay, bucket ghi `status = failed`, **không retry model khác**.
+3. Gọi **`generateBatch`** cho đúng `quizType` với **một** model duy nhất. Không truyền `model` vào `fillBucketDetailed` → tự chọn qua `pickStudyModelForContext('schedule')` (xem "Chọn model" bên dưới). AI call fail → throw ngay, bucket ghi `status = failed`, **không retry model khác**.
 4. Mỗi phần tử trong kết quả → một `PushQuestionInput` (kèm `topicId`, token usage).
 5. Nếu sau batch vẫn thiếu chỗ: thử bù tối đa **2** câu với **`pickQuizType()`** ngẫu nhiên (cùng `topicName`).
 6. `pushQuestions(generated)`; đồng thời `DEL` Redis lock key trong `finally`.
@@ -227,17 +227,44 @@ interface QuestionGenJobData {
 
 Toàn bộ logic "cần refill gì, refill bao nhiêu, refill bằng cách nào" nằm ở đây, dùng chung cho cả 3 cơ chế:
 
-| Function                                            | Vai trò                                                                                                       |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `scanBuckets({ scope, thresholdCheck })`            | Quét `topic × engLevel × quizType`, trả candidate list đã sort (xem "Chống đói bucket" bên dưới)              |
-| `buildRefillPlan(candidates, opts)`                 | Hàm thuần — cắt candidate list theo budget (`maxQuestionsPerRun`) + cap per-bucket (`perBucketCap`), trả plan |
-| `runScheduledRefill(flowProducer, trigger)`         | `scope=deficient, thresholdCheck=target`, có budget, build BullMQ flow                                        |
-| `runOnDemandRefill(bucket)`                         | 1 bucket, `thresholdCheck=ratio`, enqueue 1 job — hành vi giữ nguyên như bản cũ                               |
-| `runManualRefill({ model, countPerBucket, scope })` | `scope=all` mặc định, không giới hạn budget, chạy in-process bounded concurrency                              |
+| Function                                                      | Vai trò                                                                                                       |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `scanBuckets({ scope, thresholdCheck })`                      | Quét `topic × engLevel × quizType`, trả candidate list đã sort (xem "Chống đói bucket" bên dưới)              |
+| `buildRefillPlan(candidates, opts)`                           | Hàm thuần — cắt candidate list theo budget (`maxQuestionsPerRun`) + cap per-bucket (`perBucketCap`), trả plan |
+| `runScheduledRefill(flowProducer, trigger)`                   | `scope=deficient, thresholdCheck=target`, có budget, build BullMQ flow                                        |
+| `runOnDemandRefill(bucket)`                                   | 1 bucket, `thresholdCheck=ratio`, enqueue 1 job — hành vi giữ nguyên như bản cũ                               |
+| `runManualRefill({ model, provider, countPerBucket, scope })` | `scope=all` mặc định, không giới hạn budget, chạy in-process bounded concurrency                              |
 
 **Chống đói bucket (starvation fix)**: `scanBuckets` sort theo `(deficiency giảm dần, lần refill thành công gần nhất tăng dần — null trước, bucketKey tăng dần)`. Tiêu chí thứ 2 lấy từ `MAX(finishedAt)` trên `english_cron_job_buckets` (không cần cột/bảng mới) — đảm bảo khi 1 lần chạy bị budget-cap giữa chừng, lần chạy sau **ưu tiên đúng những bucket bị bỏ sót lần trước**, thay vì luôn quét theo thứ tự cố định topic → engLevel → quizType và làm đói mãi mãi các bucket cuối danh sách.
 
 **`questionPoolTrigger.service.ts`** (`ensurePoolFilled`) vẫn là entrypoint của `POST /english/pool/fill`, nhưng giờ chỉ là 1 dòng delegate sang `poolRefillService.runOnDemandRefill(...)`.
+
+---
+
+## Chọn model & provider routing
+
+Model không còn hardcode. Nguồn sự thật là bảng `ai_models` (CRUD qua `/admin/models*`), mỗi row có 2 cờ bật/tắt độc lập và 2 bộ provider routing riêng:
+
+| Cột                                               | Ý nghĩa                                                                     |
+| ------------------------------------------------- | --------------------------------------------------------------------------- |
+| `isActive`                                        | Tắt hẳn model, không dùng ở bất kỳ context nào                              |
+| `scheduleEnabled` / `manualEnabled`               | Model có nằm trong pool chọn ngẫu nhiên của từng context hay không          |
+| `scheduleProvider` / `manualProvider`             | `ProviderPreferences` của OpenRouter, pass thẳng vào `chatRequest.provider` |
+| `pricePromptPerToken` / `priceCompletionPerToken` | Giá USD/token cache từ OpenRouter catalog, dùng tính `costUsd`              |
+
+**Hai context** (`ModelContext` trong `src/configs/aiClient.config.ts`):
+
+| Context      | Dùng ở đâu                                                            | Lọc theo          |
+| ------------ | --------------------------------------------------------------------- | ----------------- |
+| `'schedule'` | Scheduled refill, on-demand backstop, `/english/generate*` (mặc định) | `scheduleEnabled` |
+| `'manual'`   | `POST /admin/pool/refill`                                             | `manualEnabled`   |
+
+- `pickStudyModelForContext(context)` — random uniform trong pool đã lọc; pool rỗng → fallback về `MODELS` hardcode (không kèm provider). `NODE_ENV=development` luôn ghim `GEMINI_FLASH_LITE`.
+- `resolveStudyModel(context, explicitModelId?)` — có chỉ định model thì vẫn **lấy provider routing của chính model đó** theo context, không bỏ qua config.
+
+**Giá & cost**: giá được nạp tự động lúc tạo model (và khi đổi `modelId`), refresh thủ công qua `POST /admin/models/:id/sync` hoặc `POST /admin/models/sync-all`. Duyệt catalog thật của OpenRouter qua `GET /admin/models/catalog?search=`. Model có suffix routing (`:nitro`, `:floor`) được so khớp với bản đã bỏ suffix trên catalog.
+
+`costUsd = pricePrompt × tokenIn + priceCompletion × tokenOut`, ghi ở cả 3 mức `english_cron_job_model_attempts` → `_buckets` → `_runs`. Model chưa có giá cache → `costUsd = null` (phân biệt với `0` = model free). Xem tổng hợp chi tiêu qua `GET /english/cron/usage?groupBy=day|model`.
 
 ---
 
@@ -304,9 +331,10 @@ Parent job (pool-refill-scan)
 
 ## Manual Fill
 
-`POST /admin/pool/refill` — yêu cầu `ADMIN_API_KEY` (không phải tenant key), gọi `poolRefillService.runManualRefill({ model, countPerBucket, scope })`.
+`POST /admin/pool/refill` — yêu cầu `ADMIN_API_KEY` (không phải tenant key), gọi `poolRefillService.runManualRefill({ model, provider, countPerBucket, scope })`.
 
 - Không dùng BullMQ — chạy in-process bằng `runWithConcurrency`, concurrency = `question_pool.manualFillConcurrency`.
+- `model` bỏ trống → random trong các model bật `manualEnabled`; truyền tường minh → vẫn dùng `manualProvider` của model đó. Cả run dùng chung 1 model (khác scheduled refill: mỗi child job tự chọn lại).
 - `scope: 'all'` (mặc định): scan toàn bộ bucket bất kể đầy/thiếu, force mỗi bucket đúng `countPerBucket` câu (mặc định `question_pool.manualFillDefaultCount` nếu không truyền) — tương đương `skipPoolCheck = true` của bản cũ.
 - `scope: 'deficient'`: chỉ scan bucket còn thiếu, top-up đúng phần còn thiếu tới `maxPerBucket` (hoặc `countPerBucket` nếu truyền tường minh).
 - **Không bị giới hạn** `job_flags.poolRefillMaxQuestionsPerRun` — đây là hành động admin chủ động, chấp nhận chi phí, khác với scheduled refill (có budget tự động).
@@ -315,4 +343,4 @@ Parent job (pool-refill-scan)
 
 ## Monitor
 
-Run tracking (run → bucket → model attempt) ghi vào DB (`english_cron_job_runs` / `_buckets` / `_model_attempts`). Xem qua API `GET /english/cron/runs`, `GET /english/cron/runs/:runId`, hoặc Bull Board tại `/queues`.
+Run tracking (run → bucket → model attempt) ghi vào DB (`english_cron_job_runs` / `_buckets` / `_model_attempts`), kèm `costUsd` ở cả 3 mức. Xem qua API `GET /english/cron/runs`, `GET /english/cron/runs/:runId`, `GET /english/cron/usage` (tổng hợp chi tiêu theo ngày/model), hoặc Bull Board tại `/queues`.

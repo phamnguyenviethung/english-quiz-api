@@ -1,8 +1,12 @@
+import type { ProviderPreferencesJson } from '@/core/db/schema/main';
+
 export interface DifficultyContext {
   engLevel: 'A1' | 'A2' | 'B1' | 'B2';
   optionCount: 3 | 4 | 5;
   show5050: boolean;
   model: string;
+  // Provider routing của model đang dùng (lấy từ ai_models theo context schedule/manual).
+  provider?: ProviderPreferencesJson;
   topicName?: string | null;
 }
 

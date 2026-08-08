@@ -1,5 +1,5 @@
 import logger from '@/configs/logger.config';
-import { NotFoundException } from '@/core/exceptions';
+import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
 import { assertTopicAllowed, assertQuizTypeAllowed } from '@/api/plugins/tenantAuth.plugin';
 import type { TenantContext } from '@/core/services/tenant/tenant.service';
 import studyService, {
@@ -195,6 +195,24 @@ async function getCronRun(runId: string) {
   return detail;
 }
 
+interface CronUsageInput {
+  from?: string;
+  to?: string;
+  groupBy?: 'day' | 'model';
+}
+
+// Mặc định 30 ngày gần nhất khi không truyền khoảng thời gian.
+function getCronUsage(input: CronUsageInput) {
+  const to = input.to ? new Date(input.to) : new Date();
+  const from = input.from ? new Date(input.from) : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    throw new BusinessLogicException('`from`/`to` không phải ngày hợp lệ (ISO 8601)');
+  }
+  if (from > to) throw new BusinessLogicException('`from` phải nhỏ hơn hoặc bằng `to`');
+
+  return englishCronJobTrackingService.getUsageAnalytics({ from, to, groupBy: input.groupBy ?? 'day' });
+}
+
 export default {
   generate,
   generateReading,
@@ -213,5 +231,6 @@ export default {
   randomTopicPairs,
   createTopic,
   listCronRuns,
-  getCronRun
+  getCronRun,
+  getCronUsage
 };

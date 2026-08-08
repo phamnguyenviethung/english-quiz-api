@@ -5,6 +5,7 @@ import questionPoolService, { getMaxPoolSize, getPerBucketGenerationCap } from '
 import topicService from './topic.service';
 import type { QuizType } from './questionTypes';
 import type { DifficultyContext } from './study.service';
+import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
 import englishCronJobTrackingService, {
   normalizeError,
@@ -221,7 +222,7 @@ async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number)
 async function executeManualPlanInProcess(
   plan: RefillPlanResult,
   run: EnglishCronRunRef | null,
-  opts: { model: string; concurrency: number }
+  opts: { model: string; provider?: ProviderPreferencesJson; concurrency: number }
 ): Promise<void> {
   const runKey = run?.runId ?? `untracked-${Date.now()}`;
   if (activeManualRuns.has(runKey)) {
@@ -247,6 +248,7 @@ async function executeManualPlanInProcess(
         topicName: item.topicName,
         count: item.count,
         model: opts.model,
+        provider: opts.provider,
         skipPoolCheck: true,
         logTag: LOG_TAG,
         trackingRun: run,
@@ -389,6 +391,7 @@ export async function runOnDemandRefill(input: OnDemandRefillInput): Promise<{ e
 
 export interface ManualRefillParams {
   model: string;
+  provider?: ProviderPreferencesJson;
   countPerBucket?: number;
   scope?: 'all' | 'deficient';
 }
@@ -423,6 +426,7 @@ export async function runManualRefill(
 
   void executeManualPlanInProcess(plan, run, {
     model: params.model,
+    provider: params.provider,
     concurrency: getEnglishConfigSnapshot().question_pool.manualFillConcurrency
   });
 

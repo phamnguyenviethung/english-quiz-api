@@ -1,5 +1,6 @@
 import { t } from 'elysia';
 import { ENG_LEVELS, QUIZ_TYPES } from '@/core/services/english/questionTypes';
+import { MODEL_QUANTIZATIONS } from '@/core/db/schema/main';
 
 // TypeBox schema dùng chung ở request boundary. Xây từ source-of-truth domain
 // (ENG_LEVELS, QUIZ_TYPES) để validation declarative — Elysia tự trả 400 khi sai,
@@ -31,3 +32,29 @@ export const PoolOptionCountSchema = t.Union([t.Literal(4), t.Literal(5)]);
 
 // Path param `:id` dạng số — t.Numeric() auto-coerce string→number và reject phi số → 400.
 export const IdParam = t.Object({ id: t.Numeric() });
+
+// Provider routing preferences của OpenRouter (pass-through thẳng vào chatRequest.provider).
+// Khớp ProviderPreferencesJson ở schema/main.ts — sửa một chỗ thì sửa cả hai.
+export const ProviderPreferencesSchema = t.Object({
+  order: t.Optional(t.Array(t.String(), { description: 'Thứ tự ưu tiên provider slug, vd ["google-vertex"].' })),
+  allowFallbacks: t.Optional(t.Boolean({ description: 'false = chỉ dùng provider trong order, lỗi thì fail luôn.' })),
+  requireParameters: t.Optional(t.Boolean()),
+  dataCollection: t.Optional(t.Union([t.Literal('allow'), t.Literal('deny')])),
+  ignore: t.Optional(t.Array(t.String())),
+  only: t.Optional(t.Array(t.String())),
+  quantizations: t.Optional(t.Array(t.Union(toLiterals(MODEL_QUANTIZATIONS)))),
+  sort: t.Optional(t.String({ description: 'Chiến lược sort khi không set order, vd "price" | "throughput".' })),
+  maxPrice: t.Optional(
+    t.Object(
+      {
+        prompt: t.Optional(t.String()),
+        completion: t.Optional(t.String()),
+        request: t.Optional(t.String()),
+        image: t.Optional(t.String()),
+        audio: t.Optional(t.String())
+      },
+      { description: 'Trần giá USD trên 1 triệu token.' }
+    )
+  ),
+  zdr: t.Optional(t.Boolean({ description: 'true = chỉ dùng endpoint Zero Data Retention.' }))
+});

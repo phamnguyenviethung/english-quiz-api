@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, lte, max, ne } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, lt, lte, max, ne, sql, sum } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import {
@@ -57,6 +57,7 @@ export type EnglishCronJobRunListItem = Pick<
   | 'insertedQuestions'
   | 'tokenIn'
   | 'tokenOut'
+  | 'costUsd'
   | 'durationMs'
   | 'startedAt'
 >;
@@ -72,6 +73,7 @@ export type EnglishCronJobBucketDetailItem = Pick<
   | 'requestedCount'
   | 'generatedCount'
   | 'insertedCount'
+  | 'costUsd'
   | 'errorPhase'
   | 'errorMessage'
   | 'errorStack'
@@ -87,6 +89,7 @@ export type EnglishCronJobModelAttemptDetailItem = Pick<
   | 'generatedCount'
   | 'tokenIn'
   | 'tokenOut'
+  | 'costUsd'
   | 'errorMessage'
 >;
 
@@ -102,6 +105,7 @@ type RunPatch = Partial<{
   insertedQuestions: number;
   tokenIn: number;
   tokenOut: number;
+  costUsd: number | null;
   errorPhase: EnglishCronJobErrorPhase;
   errorMessage: string;
   errorStack: string;
@@ -309,6 +313,7 @@ async function finishBucket(
     skippedCount?: number;
     tokenIn?: number;
     tokenOut?: number;
+    costUsd?: number | null;
     errorPhase?: EnglishCronJobErrorPhase;
     error?: unknown;
   }
@@ -332,6 +337,7 @@ async function finishBucket(
         skippedCount: input.skippedCount,
         tokenIn: input.tokenIn,
         tokenOut: input.tokenOut,
+        costUsd: input.costUsd,
         errorPhase: input.errorPhase,
         errorMessage: normalized?.message,
         errorStack: normalized?.stack,
@@ -353,6 +359,7 @@ async function recordModelAttempt(input: {
   generatedCount?: number;
   tokenIn?: number;
   tokenOut?: number;
+  costUsd?: number | null;
   startedAt: Date;
   error?: unknown;
 }): Promise<void> {
@@ -370,6 +377,7 @@ async function recordModelAttempt(input: {
       generatedCount: input.generatedCount ?? 0,
       tokenIn: input.tokenIn ?? 0,
       tokenOut: input.tokenOut ?? 0,
+      costUsd: input.costUsd ?? null,
       errorMessage: normalized?.message,
       errorStack: normalized?.stack,
       startedAt: input.startedAt,
@@ -423,6 +431,10 @@ async function summarizeRun(
     const insertedQuestions = buckets.reduce((sum, b) => sum + b.insertedCount, 0);
     const tokenIn = buckets.reduce((sum, b) => sum + b.tokenIn, 0);
     const tokenOut = buckets.reduce((sum, b) => sum + b.tokenOut, 0);
+    // Giữ null nếu không bucket nào tính được cost (model chưa có giá) — 0 sẽ bị
+    // hiểu nhầm thành "chạy miễn phí".
+    const pricedBuckets = buckets.filter((b) => b.costUsd !== null);
+    const costUsd = pricedBuckets.length === 0 ? null : pricedBuckets.reduce((sum, b) => sum + b.costUsd!, 0);
 
     let status: EnglishCronJobStatus = 'success';
     if (runningBuckets > 0) status = 'running';
@@ -445,6 +457,7 @@ async function summarizeRun(
         insertedQuestions,
         tokenIn,
         tokenOut,
+        costUsd,
         finishedAt,
         durationMs: finishedAt ? nowDuration(existing.startedAt) : null,
         updatedAt: new Date()
@@ -533,6 +546,7 @@ async function listRuns(input: {
         insertedQuestions: englishCronJobRun.insertedQuestions,
         tokenIn: englishCronJobRun.tokenIn,
         tokenOut: englishCronJobRun.tokenOut,
+        costUsd: englishCronJobRun.costUsd,
         durationMs: englishCronJobRun.durationMs,
         startedAt: englishCronJobRun.startedAt
       })
@@ -573,6 +587,7 @@ async function getRunDetail(
         requestedCount: englishCronJobBucket.requestedCount,
         generatedCount: englishCronJobBucket.generatedCount,
         insertedCount: englishCronJobBucket.insertedCount,
+        costUsd: englishCronJobBucket.costUsd,
         errorPhase: englishCronJobBucket.errorPhase,
         errorMessage: englishCronJobBucket.errorMessage,
         errorStack: englishCronJobBucket.errorStack
@@ -597,6 +612,7 @@ async function getRunDetail(
               generatedCount: englishCronJobModelAttempt.generatedCount,
               tokenIn: englishCronJobModelAttempt.tokenIn,
               tokenOut: englishCronJobModelAttempt.tokenOut,
+              costUsd: englishCronJobModelAttempt.costUsd,
               errorMessage: englishCronJobModelAttempt.errorMessage
             })
             .from(englishCronJobModelAttempt)
@@ -607,6 +623,60 @@ async function getRunDetail(
     const normalized = normalizeError(err);
     logger.warn(`[EnglishCronTracking] getRunDetail failed: ${normalized.message}`);
     return null;
+  }
+}
+
+export interface EnglishCronUsageItem {
+  bucket: string;
+  costUsd: number;
+  tokenIn: number;
+  tokenOut: number;
+  requestCount: number;
+}
+
+/**
+ * Tổng hợp chi tiêu từ english_cron_job_model_attempts — bảng duy nhất có đủ
+ * (model, token, cost) ở mức từng lần gọi AI. Group theo ngày (timeline) hoặc
+ * theo model (so sánh model nào tốn nhất).
+ */
+async function getUsageAnalytics(input: {
+  from: Date;
+  to: Date;
+  groupBy: 'day' | 'model';
+}): Promise<EnglishCronUsageItem[]> {
+  try {
+    const groupExpr =
+      input.groupBy === 'model'
+        ? sql<string>`${englishCronJobModelAttempt.model}`
+        : sql<string>`to_char(date_trunc('day', ${englishCronJobModelAttempt.startedAt}), 'YYYY-MM-DD')`;
+
+    const rows = await db
+      .select({
+        bucket: groupExpr,
+        costUsd: sum(englishCronJobModelAttempt.costUsd),
+        tokenIn: sum(englishCronJobModelAttempt.tokenIn),
+        tokenOut: sum(englishCronJobModelAttempt.tokenOut),
+        requestCount: count()
+      })
+      .from(englishCronJobModelAttempt)
+      .where(
+        and(gte(englishCronJobModelAttempt.startedAt, input.from), lte(englishCronJobModelAttempt.startedAt, input.to))
+      )
+      .groupBy(groupExpr)
+      .orderBy(groupExpr);
+
+    // sum() trả string (numeric) hoặc null khi mọi giá trị đều null.
+    return rows.map((row) => ({
+      bucket: row.bucket,
+      costUsd: Number(row.costUsd ?? 0),
+      tokenIn: Number(row.tokenIn ?? 0),
+      tokenOut: Number(row.tokenOut ?? 0),
+      requestCount: row.requestCount
+    }));
+  } catch (err) {
+    const normalized = normalizeError(err);
+    logger.warn(`[EnglishCronTracking] getUsageAnalytics failed: ${normalized.message}`);
+    return [];
   }
 }
 
@@ -742,6 +812,7 @@ export default {
   getLastBucketRefillTimestamps,
   listRuns,
   getRunDetail,
+  getUsageAnalytics,
   getRecentRuns,
   getRecentFailedBuckets,
   getRetryBuckets,

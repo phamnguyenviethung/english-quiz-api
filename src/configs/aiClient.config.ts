@@ -1,7 +1,9 @@
 import { OpenRouter } from '@openrouter/sdk';
 import { z } from 'zod';
+import _ from 'lodash';
 import logger from '@/configs/logger.config';
 import aiModelService from '@/core/services/ai/aiModel.service';
+import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set');
@@ -27,14 +29,51 @@ export const MODELS = {
 
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];
 
-export async function getStudyModels(): Promise<string[]> {
-  const ids = await aiModelService.getActiveModelIds();
-  logger.info(`[aiClient] Active models: ${ids.join(', ')}`);
-  if (ids.length === 0) {
-    logger.warn('[aiClient] No active models in DB, falling back to hardcoded MODELS');
-    return Object.values(MODELS);
+/**
+ * Context sinh câu hỏi. Mỗi model bật/tắt độc lập cho từng context và có provider
+ * routing riêng — schedule dùng cho mọi đường tự động (cron refill + on-demand
+ * backstop), manual chỉ cho admin trigger.
+ */
+export type ModelContext = 'schedule' | 'manual';
+
+export interface ResolvedStudyModel {
+  model: string;
+  provider?: ProviderPreferencesJson;
+}
+
+export async function getStudyModelsForContext(context: ModelContext): Promise<ResolvedStudyModel[]> {
+  const activeModels = await aiModelService.getActiveModels();
+  const enabled = activeModels.filter((m) => (context === 'schedule' ? m.scheduleEnabled : m.manualEnabled));
+
+  if (enabled.length === 0) {
+    logger.warn(`[aiClient] No active models enabled for context=${context}, falling back to hardcoded MODELS`);
+    return Object.values(MODELS).map((model) => ({ model }));
   }
-  return ids;
+
+  logger.info(`[aiClient] Active models (context=${context}): ${enabled.map((m) => m.modelId).join(', ')}`);
+  return enabled.map((m) => ({
+    model: m.modelId,
+    provider: (context === 'schedule' ? m.scheduleProvider : m.manualProvider) ?? undefined
+  }));
+}
+
+export async function pickStudyModelForContext(context: ModelContext): Promise<ResolvedStudyModel> {
+  if (process.env.NODE_ENV === 'development') return { model: MODELS.GEMINI_FLASH_LITE };
+  const candidates = await getStudyModelsForContext(context);
+  return _.sample(candidates) ?? { model: MODELS.GPT_4_O_MINI };
+}
+
+/**
+ * Model chỉ định sẵn vẫn cần provider routing của chính nó (không bỏ qua config
+ * chỉ vì caller truyền modelId). Không truyền model → random theo context.
+ */
+export async function resolveStudyModel(context: ModelContext, explicitModelId?: string): Promise<ResolvedStudyModel> {
+  if (!explicitModelId) return pickStudyModelForContext(context);
+  const row = await aiModelService.getModelByModelId(explicitModelId);
+  return {
+    model: explicitModelId,
+    provider: (context === 'schedule' ? row?.scheduleProvider : row?.manualProvider) ?? undefined
+  };
 }
 
 interface StructuredOutputRequest {
@@ -43,6 +82,7 @@ interface StructuredOutputRequest {
   input: string;
   maxOutputTokens?: number;
   temperature?: number;
+  provider?: ProviderPreferencesJson;
 }
 
 export interface StructuredOutputUsage {
@@ -81,6 +121,7 @@ export async function generateStructuredOutput<TSchema extends z.ZodObject<z.Zod
       messages,
       temperature: request.temperature,
       maxCompletionTokens: request.maxOutputTokens,
+      provider: request.provider,
       tools: [
         {
           type: 'function' as const,

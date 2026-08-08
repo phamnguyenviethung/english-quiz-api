@@ -15,6 +15,7 @@ import {
   EnglishConfigRecordViewSchema,
   EnglishCronJobRunSchema,
   CronRunDetailSchema,
+  CronUsageAnalyticsItemSchema,
   GenerateQuestionResponseSchema,
   GenerateReadingResponseSchema
 } from '@/api/common/responseSchemas';
@@ -428,6 +429,29 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       200: ApiOk(CronRunDetailSchema),
       403: ApiErrorSchema,
       404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/cron/usage', async ({ query }) => ok(await englishController.getCronUsage(query)), {
+    auth: { admin: true },
+    query: t.Object({
+      from: t.Optional(t.String({ description: 'ISO 8601. Mặc định 30 ngày trước `to`.' })),
+      to: t.Optional(t.String({ description: 'ISO 8601. Mặc định thời điểm hiện tại.' })),
+      groupBy: t.Optional(t.Union([t.Literal('day'), t.Literal('model')], { description: 'Mặc định "day".' }))
+    }),
+    detail: {
+      tags: ['English / Cron Tracking'],
+      summary: 'Get AI usage & cost analytics',
+      description:
+        'Tổng hợp token + chi phí USD từ các lần gọi AI (english_cron_job_model_attempts), gộp theo ngày ' +
+        '(`groupBy=day`, mặc định) hoặc theo model (`groupBy=model`). `costUsd` chỉ cộng các lần gọi bằng model ' +
+        'đã có giá cache — model chưa sync giá đóng góp 0. Chỉ dùng được với ADMIN_API_KEY.',
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Array(CronUsageAnalyticsItemSchema)),
+      400: ApiErrorSchema,
+      403: ApiErrorSchema,
       ...COMMON_ERRORS
     }
   });

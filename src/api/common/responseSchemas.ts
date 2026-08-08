@@ -1,7 +1,7 @@
 import { t, type TSchema } from 'elysia';
 import { z } from 'zod';
 import { ApiErrorCode } from './errorCodes';
-import { QuizTypeSchema } from './schemas';
+import { ProviderPreferencesSchema, QuizTypeSchema } from './schemas';
 import {
   QuestionPoolSchema,
   QuizDistributionSchema,
@@ -74,8 +74,44 @@ export const AiModelSchema = t.Object({
   key: t.String(),
   modelId: t.String(),
   isActive: t.Boolean(),
+  scheduleEnabled: t.Boolean(),
+  manualEnabled: t.Boolean(),
+  scheduleProvider: t.Nullable(ProviderPreferencesSchema),
+  manualProvider: t.Nullable(ProviderPreferencesSchema),
+  pricePromptPerToken: t.Nullable(t.Number()),
+  priceCompletionPerToken: t.Nullable(t.Number()),
+  pricingRaw: t.Nullable(t.Record(t.String(), t.Unknown())),
+  openrouterMeta: t.Nullable(t.Record(t.String(), t.Unknown())),
+  pricingSyncedAt: t.Nullable(DateTimeSchema),
   createdAt: t.Nullable(DateTimeSchema),
   updatedAt: t.Nullable(DateTimeSchema)
+});
+
+// Model trên catalog OpenRouter (chưa chắc đã được thêm vào ai_models).
+export const CatalogModelSchema = t.Object({
+  id: t.String(),
+  name: t.String(),
+  description: t.Nullable(t.String()),
+  contextLength: t.Nullable(t.Number()),
+  pricing: t.Object({
+    prompt: t.Nullable(t.Number()),
+    completion: t.Nullable(t.Number()),
+    request: t.Nullable(t.Number()),
+    image: t.Nullable(t.Number())
+  }),
+  supportedParameters: t.Array(t.String()),
+  topProvider: t.Nullable(
+    t.Object({
+      contextLength: t.Nullable(t.Number()),
+      maxCompletionTokens: t.Nullable(t.Number()),
+      isModerated: t.Boolean()
+    })
+  )
+});
+
+export const ModelPricingSyncResultSchema = t.Object({
+  synced: t.Number(),
+  notFound: t.Array(t.String())
 });
 
 // ── Tenant API key ───────────────────────────────────────────────────────────
@@ -229,6 +265,7 @@ export const EnglishCronJobRunSchema = t.Object({
   insertedQuestions: t.Number(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
+  costUsd: t.Nullable(t.Number()),
   errorPhase: t.Nullable(t.String()),
   errorMessage: t.Nullable(t.String()),
   errorStack: t.Nullable(t.String()),
@@ -250,6 +287,7 @@ export const EnglishCronJobBucketDetailSchema = t.Object({
   requestedCount: t.Number(),
   generatedCount: t.Number(),
   insertedCount: t.Number(),
+  costUsd: t.Nullable(t.Number()),
   errorPhase: t.Nullable(t.String()),
   errorMessage: t.Nullable(t.String()),
   errorStack: t.Nullable(t.String())
@@ -264,6 +302,7 @@ export const EnglishCronJobModelAttemptDetailSchema = t.Object({
   generatedCount: t.Number(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
+  costUsd: t.Nullable(t.Number()),
   errorMessage: t.Nullable(t.String())
 });
 
@@ -272,6 +311,16 @@ export const CronRunDetailSchema = t.Object({
   buckets: t.Array(EnglishCronJobBucketDetailSchema),
   attempts: t.Array(EnglishCronJobModelAttemptDetailSchema),
   hasNextBuckets: t.Boolean()
+});
+
+// Tổng hợp chi tiêu theo ngày hoặc theo model. `bucket` = nhãn nhóm (ISO date
+// hoặc modelId tuỳ groupBy). costUsd bỏ qua attempt của model chưa có giá cache.
+export const CronUsageAnalyticsItemSchema = t.Object({
+  bucket: t.String(),
+  costUsd: t.Number(),
+  tokenIn: t.Number(),
+  tokenOut: t.Number(),
+  requestCount: t.Number()
 });
 
 // ── Generation (Zod — tái dùng schema đã có trong study.service.ts) ──────────

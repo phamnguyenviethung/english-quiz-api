@@ -4,7 +4,9 @@ import tenantService from '@/core/services/tenant/tenant.service';
 import apiKeyService from '@/core/services/tenant/apiKey.service';
 import poolRefillService from '@/core/services/english/poolRefill.service';
 import aiModelService from '@/core/services/ai/aiModel.service';
-import { MODELS } from '@/configs/aiClient.config';
+import openrouterCatalogService from '@/core/services/ai/openrouterCatalog.service';
+import { resolveStudyModel } from '@/configs/aiClient.config';
+import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
 // ─── Tenants ────────────────────────────────────────────────────────────────────
 
@@ -58,21 +60,43 @@ interface CreateModelInput {
   key: string;
   modelId: string;
   isActive?: boolean;
+  scheduleEnabled?: boolean;
+  manualEnabled?: boolean;
+  scheduleProvider?: ProviderPreferencesJson | null;
+  manualProvider?: ProviderPreferencesJson | null;
 }
 
 function createModel(input: CreateModelInput) {
   logger.info(`[Admin] Create AI model key="${input.key}" modelId="${input.modelId}"`);
-  return aiModelService.createModel({ key: input.key, modelId: input.modelId, isActive: input.isActive ?? true });
+  return aiModelService.createModel({ ...input, isActive: input.isActive ?? true });
 }
 
 interface UpdateModelInput {
   key?: string;
   modelId?: string;
   isActive?: boolean;
+  scheduleEnabled?: boolean;
+  manualEnabled?: boolean;
+  scheduleProvider?: ProviderPreferencesJson | null;
+  manualProvider?: ProviderPreferencesJson | null;
 }
 
 function updateModel(id: number, input: UpdateModelInput) {
   return aiModelService.updateModel(id, input);
+}
+
+function listModelCatalog(search?: string) {
+  return openrouterCatalogService.listCatalogModels({ search });
+}
+
+function syncModelPricing(id: number) {
+  logger.info(`[Admin] Sync pricing for AI model id=${id}`);
+  return aiModelService.syncModelPricing(id);
+}
+
+function syncAllModelsPricing() {
+  logger.info('[Admin] Sync pricing for all AI models');
+  return aiModelService.syncAllModelsPricing();
 }
 
 // ─── API keys ────────────────────────────────────────────────────────────────────
@@ -128,11 +152,18 @@ interface TriggerManualPoolRefillInput {
 }
 
 async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
-  const model = input.model ?? MODELS.GEMINI_FLASH_LITE;
+  // Không truyền model → random trong pool model bật manualEnabled; có truyền →
+  // vẫn lấy manualProvider của chính model đó.
+  const { model, provider } = await resolveStudyModel('manual', input.model);
   logger.info(
     `[Admin] Manual pool refill scope=${input.scope ?? 'all'} model=${model} countPerBucket=${input.countPerBucket ?? '-'}`
   );
-  return poolRefillService.runManualRefill({ model, countPerBucket: input.countPerBucket, scope: input.scope });
+  return poolRefillService.runManualRefill({
+    model,
+    provider,
+    countPerBucket: input.countPerBucket,
+    scope: input.scope
+  });
 }
 
 export default {
@@ -144,6 +175,9 @@ export default {
   getModel,
   createModel,
   updateModel,
+  listModelCatalog,
+  syncModelPricing,
+  syncAllModelsPricing,
   issueKey,
   listKeys,
   revokeKey,

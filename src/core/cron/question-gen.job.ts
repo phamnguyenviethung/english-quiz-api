@@ -8,7 +8,9 @@ import questionPoolService, {
   pickQuizType
 } from '@/core/services/english/questionPool.service';
 import type { QuizType } from '@/core/services/english/questionTypes';
-import { MODELS } from '@/configs/aiClient.config';
+import { pickStudyModelForContext } from '@/configs/aiClient.config';
+import aiModelService, { computeCostUsd } from '@/core/services/ai/aiModel.service';
+import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 import logger from '@/configs/logger.config';
 import redisClient from '@/configs/redis.config';
 import englishCronJobTrackingService, {
@@ -48,6 +50,7 @@ export interface BatchGenResult {
   model: string;
   tokenIn: number;
   tokenOut: number;
+  costUsd: number | null;
 }
 
 interface BatchTrackingContext {
@@ -67,6 +70,7 @@ export async function generateBatch(
     const result = await generateBatchByType(quizType, ctx, opts);
     const tokenIn = result.usage?.inputTokens ?? 0;
     const tokenOut = result.usage?.outputTokens ?? 0;
+    const costUsd = computeCostUsd(await aiModelService.getModelByModelId(model), tokenIn, tokenOut);
     await englishCronJobTrackingService.recordModelAttempt({
       run: tracking?.run ?? null,
       bucket: tracking?.bucket ?? null,
@@ -77,6 +81,7 @@ export async function generateBatch(
       generatedCount: result.questions.length,
       tokenIn,
       tokenOut,
+      costUsd,
       startedAt: attemptStartedAt
     });
     return {
@@ -88,7 +93,8 @@ export async function generateBatch(
       })),
       model,
       tokenIn,
-      tokenOut
+      tokenOut,
+      costUsd
     };
   } catch (err) {
     await englishCronJobTrackingService.recordModelAttempt({
@@ -151,6 +157,7 @@ export interface FillBucketParams {
   count: number;
   logTag?: string;
   model?: string;
+  provider?: ProviderPreferencesJson;
   skipPoolCheck?: boolean;
   trackingRun?: EnglishCronRunRef | null;
   trackingMetadata?: Record<string, unknown>;
@@ -164,6 +171,7 @@ export interface FillBucketDetailedResult {
   skipped: number;
   tokenIn: number;
   tokenOut: number;
+  costUsd: number | null;
   model?: string;
 }
 
@@ -176,6 +184,7 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
     topicName,
     logTag = 'QuestionGen',
     model,
+    provider,
     skipPoolCheck = false,
     trackingRun = null,
     trackingMetadata
@@ -219,7 +228,8 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
           inserted: 0,
           skipped: requestedCount,
           tokenIn: 0,
-          tokenOut: 0
+          tokenOut: 0,
+          costUsd: null
         };
       }
       batchCount = Math.min(Math.min(requestedCount, getPerBucketGenerationCap()), needed);
@@ -247,16 +257,21 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
           inserted: 0,
           skipped: requestedCount,
           tokenIn: 0,
-          tokenOut: 0
+          tokenOut: 0,
+          costUsd: null
         };
       }
     }
 
+    // Không chỉ định model (đường on-demand backstop) → dùng đúng pool model của
+    // context 'schedule' như cron refill, thay vì ghim cứng 1 model rẻ.
+    const resolved = model ? { model, provider } : await pickStudyModelForContext('schedule');
     const ctx: DifficultyContext = {
       engLevel,
       optionCount,
       show5050: true,
-      model: model ?? MODELS.GEMINI_FLASH_LITE
+      model: resolved.model,
+      provider: resolved.provider
     };
     const batchOpts: BatchGenerateOptions = { count: batchCount, topic: topicName ?? undefined };
     logger.info(
@@ -284,7 +299,8 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
       insertedCount: inserted,
       skippedCount: skipped,
       tokenIn: result.tokenIn,
-      tokenOut: result.tokenOut
+      tokenOut: result.tokenOut,
+      costUsd: result.costUsd
     });
     logger.info(
       `[${logTag}] Batch done quizType=${quizType} generated=${generated.length}/${batchCount} inserted=${inserted}`
@@ -297,6 +313,7 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
       skipped,
       tokenIn: result.tokenIn,
       tokenOut: result.tokenOut,
+      costUsd: result.costUsd,
       model: result.model
     };
   } catch (err) {

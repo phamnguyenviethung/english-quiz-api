@@ -11,6 +11,32 @@ import {
   uniqueIndex
 } from 'drizzle-orm/pg-core';
 
+// Khớp với Quantization của OpenRouter SDK (closed enum) — giữ literal union để
+// gán thẳng vào chatRequest.provider mà không cần cast.
+export const MODEL_QUANTIZATIONS = ['int4', 'int8', 'fp4', 'fp6', 'fp8', 'fp16', 'bf16', 'fp32', 'unknown'] as const;
+export type ModelQuantization = (typeof MODEL_QUANTIZATIONS)[number];
+
+// Subset of OpenRouter's ProviderPreferences we expose/validate in the admin API
+// (see src/api/common/schemas.ts ProviderPreferencesSchema for the matching TypeBox shape).
+export interface ProviderPreferencesJson {
+  order?: string[];
+  allowFallbacks?: boolean;
+  requireParameters?: boolean;
+  dataCollection?: 'allow' | 'deny';
+  ignore?: string[];
+  only?: string[];
+  quantizations?: ModelQuantization[];
+  sort?: string;
+  maxPrice?: {
+    prompt?: string;
+    completion?: string;
+    request?: string;
+    image?: string;
+    audio?: string;
+  };
+  zdr?: boolean;
+}
+
 // ----------------------------------------------------------------------------
 // English topics
 // ----------------------------------------------------------------------------
@@ -82,6 +108,8 @@ export const englishCronJobRun = pgTable(
     insertedQuestions: integer().default(0).notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
+    // Chi phí USD tính từ token × giá cache trên ai_models. null = model chưa có giá.
+    costUsd: doublePrecision(),
     errorPhase: text(),
     errorMessage: text(),
     errorStack: text(),
@@ -122,6 +150,7 @@ export const englishCronJobBucket = pgTable(
     skippedCount: integer().default(0).notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
+    costUsd: doublePrecision(),
     errorPhase: text(),
     errorMessage: text(),
     errorStack: text(),
@@ -159,6 +188,7 @@ export const englishCronJobModelAttempt = pgTable(
     generatedCount: integer().default(0).notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
+    costUsd: doublePrecision(),
     errorMessage: text(),
     errorStack: text(),
     startedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
@@ -240,6 +270,21 @@ export const aiModel = pgTable('ai_models', {
   key: text().notNull().unique(),
   modelId: text().notNull().unique(),
   isActive: boolean().default(true).notNull(),
+
+  // Model có được chọn cho từng context sinh câu hỏi hay không, và provider routing
+  // riêng cho mỗi context (schedule = cron/on-demand tự động, manual = admin trigger).
+  scheduleEnabled: boolean().default(true).notNull(),
+  manualEnabled: boolean().default(true).notNull(),
+  scheduleProvider: jsonb().$type<ProviderPreferencesJson>(),
+  manualProvider: jsonb().$type<ProviderPreferencesJson>(),
+
+  // Snapshot giá từ OpenRouter models API (USD/token), refresh qua /admin/models/:id/sync.
+  pricePromptPerToken: doublePrecision(),
+  priceCompletionPerToken: doublePrecision(),
+  pricingRaw: jsonb().$type<Record<string, unknown>>(),
+  openrouterMeta: jsonb().$type<Record<string, unknown>>(),
+  pricingSyncedAt: timestamp({ withTimezone: true }),
+
   createdAt: timestamp().defaultNow(),
   updatedAt: timestamp().defaultNow()
 });

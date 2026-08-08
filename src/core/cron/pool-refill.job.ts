@@ -6,7 +6,7 @@ import poolRefillService, {
   POOL_REFILL_CHILD_QUEUE
 } from '@/core/services/english/poolRefill.service';
 import logger from '@/configs/logger.config';
-import { pickStudyModel } from '@/core/services/english/study.service';
+import { pickStudyModelForContext } from '@/configs/aiClient.config';
 import { getEnglishConfigSnapshot, onEnglishConfigChanged } from '@/core/services/english/englishConfig.service';
 import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
 
@@ -53,7 +53,7 @@ function createChildWorker(): Worker<QuestionGenJobData> {
     async (job) => {
       const { engLevel, quizType, topicId, topicName, optionCount, count } = job.data;
       const trackingRun = await englishCronJobTrackingService.getRunRefByRunId(job.data.trackingRunId);
-      const model = await pickStudyModel(engLevel);
+      const { model, provider } = await pickStudyModelForContext('schedule');
       logger.info(
         `[${LOG_TAG}] Child processing: engLevel=${engLevel} topicId=${topicId} quizType=${quizType} count=${count} model=${model}`
       );
@@ -65,6 +65,7 @@ function createChildWorker(): Worker<QuestionGenJobData> {
         topicName,
         count,
         model,
+        provider,
         logTag: LOG_TAG,
         trackingRun,
         trackingMetadata: {

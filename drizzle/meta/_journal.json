@@ -15,6 +15,13 @@
       "when": 1785974613334,
       "tag": "0001_blushing_psynapse",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786147401963,
+      "tag": "0002_lyrical_red_hulk",
+      "breakpoints": true
     }
   ]
 }

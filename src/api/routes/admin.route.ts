@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { ok, created, list } from '@/api/common/response';
-import { IdParam } from '@/api/common/schemas';
+import { IdParam, ProviderPreferencesSchema } from '@/api/common/schemas';
 import {
   ApiOk,
   ApiList,
@@ -8,6 +8,8 @@ import {
   COMMON_ERRORS,
   TenantSchema,
   AiModelSchema,
+  CatalogModelSchema,
+  ModelPricingSyncResultSchema,
   PublicApiKeySchema,
   IssuedApiKeySchema,
   TenantTopicAccessSchema,
@@ -119,6 +121,26 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       ...COMMON_ERRORS
     }
   })
+  // Khai báo trước '/models/:id' để segment tĩnh không bị route param nuốt mất.
+  .get('/models/catalog', async ({ query }) => list(await adminController.listModelCatalog(query.search)), {
+    query: t.Object({
+      search: t.Optional(
+        t.String({ description: 'Lọc substring theo model id hoặc tên (không phân biệt hoa thường).' })
+      )
+    }),
+    detail: {
+      tags: ['Admin / Models'],
+      summary: 'Browse OpenRouter model catalog',
+      description:
+        'Danh sách model công khai trên OpenRouter kèm giá thực tế (USD/token) — dùng để chọn trước khi thêm vào ' +
+        `\`ai_models\`. Kết quả cache 5 phút trong process. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiList(CatalogModelSchema),
+      ...COMMON_ERRORS
+    }
+  })
   .get('/models/:id', async ({ params }) => ok(await adminController.getModel(params.id)), {
     params: IdParam,
     detail: {
@@ -146,12 +168,23 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
           minLength: 1,
           description: 'OpenRouter model id, unique. VD: google/gemini-2.5-flash-lite:nitro'
         }),
-        isActive: t.Optional(t.Boolean({ description: 'Mặc định true.' }))
+        isActive: t.Optional(t.Boolean({ description: 'Mặc định true.' })),
+        scheduleEnabled: t.Optional(
+          t.Boolean({ description: 'Cho phép chọn model này ở đường tự động (cron + on-demand). Mặc định true.' })
+        ),
+        manualEnabled: t.Optional(
+          t.Boolean({ description: 'Cho phép chọn model này khi admin trigger refill. Mặc định true.' })
+        ),
+        scheduleProvider: t.Optional(t.Nullable(ProviderPreferencesSchema)),
+        manualProvider: t.Optional(t.Nullable(ProviderPreferencesSchema))
       }),
       detail: {
         tags: ['Admin / Models'],
         summary: 'Create AI model',
-        description: `Tạo AI model mới. \`key\` và \`modelId\` đều phải unique — trùng trả 409. ${ADMIN_AUTH_DESCRIPTION}`,
+        description:
+          `Tạo AI model mới. \`key\` và \`modelId\` đều phải unique — trùng trả 409. Giá được tự động nạp từ ` +
+          `OpenRouter catalog nếu \`modelId\` có trên đó (không có thì vẫn tạo, chỉ là chưa tính được cost). ` +
+          `${ADMIN_AUTH_DESCRIPTION}`,
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -168,14 +201,19 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
     body: t.Object({
       key: t.Optional(t.String({ minLength: 1 })),
       modelId: t.Optional(t.String({ minLength: 1 })),
-      isActive: t.Optional(t.Boolean())
+      isActive: t.Optional(t.Boolean()),
+      scheduleEnabled: t.Optional(t.Boolean()),
+      manualEnabled: t.Optional(t.Boolean()),
+      scheduleProvider: t.Optional(t.Nullable(ProviderPreferencesSchema)),
+      manualProvider: t.Optional(t.Nullable(ProviderPreferencesSchema))
     }),
     detail: {
       tags: ['Admin / Models'],
       summary: 'Update AI model',
       description:
-        `Partial update (key/modelId/isActive). Soft-deactivate bằng { isActive: false } ` +
-        `— không có endpoint delete riêng. Đổi \`key\`/\`modelId\` trùng model khác trả 409. ${ADMIN_AUTH_DESCRIPTION}`,
+        `Partial update (key/modelId/isActive/scheduleEnabled/manualEnabled/*Provider). Soft-deactivate bằng ` +
+        `{ isActive: false } — không có endpoint delete riêng. Đổi \`modelId\` sẽ nạp lại giá từ catalog. ` +
+        `Đổi \`key\`/\`modelId\` trùng model khác trả 409. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -183,6 +221,36 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       400: ApiErrorSchema,
       404: ApiErrorSchema,
       409: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .post('/models/sync-all', async () => ok(await adminController.syncAllModelsPricing()), {
+    detail: {
+      tags: ['Admin / Models'],
+      summary: 'Sync pricing for all models',
+      description:
+        'Nạp lại giá + metadata từ OpenRouter catalog cho toàn bộ model trong `ai_models`. Model không có trên ' +
+        `catalog được liệt kê ở \`notFound\` và giữ nguyên giá cũ. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(ModelPricingSyncResultSchema),
+      ...COMMON_ERRORS
+    }
+  })
+  .post('/models/:id/sync', async ({ params }) => ok(await adminController.syncModelPricing(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Models'],
+      summary: 'Sync pricing for one model',
+      description:
+        `Nạp lại giá + metadata từ OpenRouter catalog cho 1 model. Model không tồn tại hoặc không có trên ` +
+        `catalog trả 404. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(AiModelSchema),
+      404: ApiErrorSchema,
       ...COMMON_ERRORS
     }
   })
@@ -328,7 +396,13 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
   // ── Pool ─────────────────────────────────────────────────────────────────────
   .post('/pool/refill', async ({ body }) => ok(await adminController.triggerManualPoolRefill(body)), {
     body: t.Object({
-      model: t.Optional(t.String({ description: 'OpenRouter model id, mặc định model rẻ nhất (Gemini Flash Lite).' })),
+      model: t.Optional(
+        t.String({
+          description:
+            'OpenRouter model id. Bỏ trống → chọn ngẫu nhiên trong các model đang bật `manualEnabled`. ' +
+            'Provider routing luôn lấy theo `manualProvider` của model được dùng.'
+        })
+      ),
       countPerBucket: t.Optional(
         t.Integer({
           minimum: 1,

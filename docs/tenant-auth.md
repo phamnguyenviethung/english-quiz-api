@@ -125,10 +125,22 @@ Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer 
 | `PUT /admin/tenants/:id/topics`            | Set allow-list topic `{ topicIds: number[] }` (replace)                                           |
 | `GET /admin/tenants/:id/quiz-types`        | Allow-list quizType hiện tại `{ tenantId, quizTypes }`                                            |
 | `PUT /admin/tenants/:id/quiz-types`        | Set allow-list quizType `{ quizTypes: string[] }` (replace)                                       |
-| `POST /admin/models`                       | Tạo AI model `{ key, modelId, isActive? }` → **201**, `key`/`modelId` unique                      |
-| `GET /admin/models`                        | List AI model (bảng `ai_models`, dùng bởi `aiClient.getStudyModels`)                              |
+| `POST /admin/models`                       | Tạo AI model → **201**, `key`/`modelId` unique, tự nạp giá từ OpenRouter catalog                  |
+| `GET /admin/models`                        | List AI model (bảng `ai_models`, nguồn chọn model sinh câu hỏi)                                   |
+| `GET /admin/models/catalog?search=`        | Duyệt catalog model thật của OpenRouter kèm giá (cache 5 phút) — chọn trước khi thêm              |
 | `GET /admin/models/:id`                    | Chi tiết AI model                                                                                 |
-| `PATCH /admin/models/:id`                  | Update AI model (key/modelId/isActive). Soft-deactivate = gửi `{ isActive: false }`               |
+| `PATCH /admin/models/:id`                  | Update AI model. Soft-deactivate = gửi `{ isActive: false }`                                      |
+| `POST /admin/models/:id/sync`              | Nạp lại giá + metadata từ catalog cho 1 model (404 nếu model không có trên catalog)               |
+| `POST /admin/models/sync-all`              | Nạp lại giá cho toàn bộ model → `{ synced, notFound[] }`                                          |
+
+Body của `POST`/`PATCH /admin/models` ngoài `key`/`modelId`/`isActive` còn nhận:
+
+| Field                                 | Ý nghĩa                                                                                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scheduleEnabled` / `manualEnabled`   | Model có nằm trong pool chọn ngẫu nhiên của context tự động / admin-trigger (mặc định `true`)                                                                                                          |
+| `scheduleProvider` / `manualProvider` | `ProviderPreferences` của OpenRouter (`order`, `only`, `ignore`, `sort`, `maxPrice`, `quantizations`, `dataCollection`, `zdr`, …) — pass thẳng vào request, cho phép cấu hình khác nhau giữa 2 context |
+
+Giá (`pricePromptPerToken`, `priceCompletionPerToken`) chỉ đọc — nạp từ catalog, không nhập tay. Chi tiết cách chọn model xem `docs/question-pool.md` § "Chọn model & provider routing".
 
 ## 8. Env & Boot
 

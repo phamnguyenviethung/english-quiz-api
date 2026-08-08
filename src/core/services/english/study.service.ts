@@ -1,9 +1,8 @@
 import { z } from 'zod';
-import _ from 'lodash';
 import {
   generateStructuredOutput,
-  getStudyModels,
-  MODELS,
+  resolveStudyModel,
+  type ModelContext,
   type StructuredOutputUsage
 } from '@/configs/aiClient.config';
 
@@ -197,12 +196,6 @@ export interface BatchGenerateOptions {
   count: number;
   topic?: string;
   excludeWords?: string[];
-}
-
-export async function pickStudyModel(_engLevel: DifficultyContext['engLevel']): Promise<string> {
-  if (process.env.NODE_ENV === 'development') return MODELS.GEMINI_FLASH_LITE;
-  const studyModels = await getStudyModels();
-  return _.sample(studyModels) ?? MODELS.GPT_4_O_MINI;
 }
 
 interface BatchResult<T> {
@@ -411,6 +404,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(PhraseQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a phrase meaning quiz question.',
       maxOutputTokens: 2000,
@@ -438,6 +432,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(FillBlankQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a fill-in-the-blank quiz question.',
       maxOutputTokens: 3000,
@@ -475,6 +470,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(ConversationQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input,
       maxOutputTokens: 3500,
@@ -514,6 +510,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(DescriptionQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a real-life description-to-vocab quiz question.',
       maxOutputTokens: 2500,
@@ -540,6 +537,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(SynonymQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a synonym/antonym quiz question.',
       maxOutputTokens: 2000,
@@ -566,6 +564,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(SlangQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a slang quiz question.',
       maxOutputTokens: 2000,
@@ -593,6 +592,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(OddOneOutQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate an odd-one-out quiz question.',
       maxOutputTokens: 2500,
@@ -627,6 +627,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(ReadingQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a reading comprehension + mental math quiz question.',
       maxOutputTokens: 4000,
@@ -660,6 +661,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(VocabQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a vocabulary quiz question.',
       maxOutputTokens: 2000,
@@ -686,6 +688,7 @@ class StudyService {
       buildVocabPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(VocabBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} vocabulary quiz question(s).`,
       maxOutputTokens: 2500 * count,
@@ -711,6 +714,7 @@ class StudyService {
       buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(PhraseBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} phrase meaning quiz question(s).`,
       maxOutputTokens: 2500 * count,
@@ -738,6 +742,7 @@ class StudyService {
       buildFillBlankPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(FillBlankBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} fill-in-the-blank quiz question(s).`,
       maxOutputTokens: 3500 * count,
@@ -769,6 +774,7 @@ class StudyService {
       buildConversationPrompt(wrongAnswerCount, { count, topic }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(ConversationBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} conversation fill-in-the-blank quiz question(s).`,
       maxOutputTokens: 4000 * count,
@@ -806,6 +812,7 @@ class StudyService {
       buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(DescriptionBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} real-life description-to-vocab quiz question(s).`,
       maxOutputTokens: 3000 * count,
@@ -831,6 +838,7 @@ class StudyService {
       buildSynonymPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(SynonymBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} synonym/antonym quiz question(s).`,
       maxOutputTokens: 2500 * count,
@@ -853,6 +861,7 @@ class StudyService {
       buildSlangPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(SlangBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} slang quiz question(s).`,
       maxOutputTokens: 2500 * count,
@@ -880,6 +889,7 @@ class StudyService {
       buildOddOneOutPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(OddOneOutBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} odd-one-out quiz question(s).`,
       maxOutputTokens: 3000 * count,
@@ -911,6 +921,7 @@ class StudyService {
     const systemInstruction = buildReadingPrompt(wrongAnswerCount, ctx.engLevel, { count, topic });
     const { data, usage } = await generateStructuredOutput(ReadingBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} reading comprehension + mental math quiz question(s).`,
       maxOutputTokens: 4500 * count,
@@ -940,6 +951,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(ParagraphQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a reading comprehension paragraph quiz question.',
       maxOutputTokens: 3000,
@@ -971,6 +983,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(IdiomQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate an idiom meaning quiz question.',
       maxOutputTokens: 2000,
@@ -995,6 +1008,7 @@ class StudyService {
       buildIdiomPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(IdiomBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} idiom meaning quiz question(s).`,
       maxOutputTokens: 2500 * count,
@@ -1021,6 +1035,7 @@ class StudyService {
     const systemInstruction = buildParagraphPrompt(wrongAnswerCount, { count, topic, excludeWords });
     const { data, usage } = await generateStructuredOutput(ParagraphBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} reading comprehension paragraph quiz question(s).`,
       maxOutputTokens: 3500 * count,
@@ -1047,6 +1062,7 @@ class StudyService {
 
     const { data: object, usage } = await generateStructuredOutput(VerbUseMatchQuestionSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: 'Generate a verb collocation quiz question.',
       maxOutputTokens: 2000,
@@ -1080,6 +1096,7 @@ class StudyService {
       buildVerbUseMatchPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(VerbUseMatchBatchSchema, {
       model: ctx.model,
+      provider: ctx.provider,
       instructions: systemInstruction,
       input: `Generate exactly ${count} verb collocation quiz question(s).`,
       maxOutputTokens: 2500 * count,
@@ -1099,20 +1116,24 @@ class StudyService {
   // ─── Dispatch & Context ────────────────────────────────────────────────────
 
   /**
-   * Build DifficultyContext cho một lần sinh câu hỏi. Chọn model tự động qua
-   * pickStudyModel nếu không truyền vào; show5050 mặc định true.
+   * Build DifficultyContext cho một lần sinh câu hỏi. Không truyền model → chọn
+   * tự động theo context (mặc định 'schedule', vì đây là đường serving tự động);
+   * show5050 mặc định true.
    */
   async buildContext(input: {
     engLevel: EngLevel;
     optionCount: 3 | 4 | 5;
     topicName?: string | null;
     model?: string;
+    context?: ModelContext;
   }): Promise<DifficultyContext> {
+    const resolved = await resolveStudyModel(input.context ?? 'schedule', input.model);
     return {
       engLevel: input.engLevel,
       optionCount: input.optionCount,
       show5050: true,
-      model: input.model ?? (await pickStudyModel(input.engLevel)),
+      model: resolved.model,
+      provider: resolved.provider,
       topicName: input.topicName ?? null
     };
   }
