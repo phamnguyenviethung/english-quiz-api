@@ -8,7 +8,10 @@ import tenantService, { type TenantContext } from './tenant.service';
 
 // Key format: eqk_<48 hex random>. Lưu plaintext trong cột `key` (unique) —
 // verify bằng lookup trực tiếp. Chưa cần hash.
-const KEY_PREFIX = 'eqk';
+//
+// Prefix được export vì `Authorization: Bearer` giờ mang 2 loại token (tenant key và
+// session token của Better Auth) — tenantAuth.plugin.ts dùng prefix để phân biệt.
+export const API_KEY_PREFIX = 'eqk_';
 const KEY_BYTES = 24; // 48 hex chars
 
 // Throttle write lastUsedAt để không ghi DB mỗi request.
@@ -18,7 +21,7 @@ const LAST_USED_THROTTLE_MS = 5 * 60 * 1000;
 export type PublicApiKey = Omit<TenantApiKey, 'key'>;
 
 function generateKey(): string {
-  return `${KEY_PREFIX}_${randomBytes(KEY_BYTES).toString('hex')}`;
+  return `${API_KEY_PREFIX}${randomBytes(KEY_BYTES).toString('hex')}`;
 }
 
 // Cấp key mới cho tenant. Trả plaintext key (đây cũng là giá trị lưu trong DB).

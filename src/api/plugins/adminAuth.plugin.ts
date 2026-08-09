@@ -1,22 +1,34 @@
 import { Elysia } from 'elysia';
-import { UnauthorizedException } from '@/core/exceptions';
-import { extractAdminKey, isAdminKey } from '@/api/common/adminKey';
+import { ForbiddenException, UnauthorizedException } from '@/core/exceptions';
+import { auth, Role, type AuthUser } from '@/configs/auth.config';
 
 /**
- * Guard cho các route quản trị (/admin/*). So sánh secret gửi lên với
- * ADMIN_API_KEY trong env. ADMIN_API_KEY được checkEnv lúc boot
- * (src/index.ts) nên chắc chắn tồn tại.
+ * Guard cho các route quản trị (/admin/*): yêu cầu **session Better Auth có role
+ * `admin`**. Thay cho ADMIN_API_KEY (secret tĩnh) trước đây.
  *
- * Chiều ngược lại: admin key cũng dùng được ở /english/* như super key —
+ * `auth.api.getSession` đọc được cả cookie lẫn `Authorization: Bearer <session token>`
+ * (plugin `bearer` convert bearer → cookie ở hook before), nên một guard phục vụ
+ * được cả dashboard (bearer) lẫn browser UI (cookie).
+ *
+ * Chiều ngược lại: session admin cũng dùng được ở /english/* như super key —
  * xem tenantAuth.plugin.ts.
  */
-export const adminAuthPlugin = new Elysia({ name: 'admin-auth' })
-  .onBeforeHandle(({ headers }) => {
-    if (!process.env.ADMIN_API_KEY) throw new UnauthorizedException('ADMIN_API_KEY chưa được cấu hình');
+export async function resolveAdminUser(headers: Headers): Promise<AuthUser> {
+  const session = await auth.api.getSession({ headers });
+  if (!session) throw new UnauthorizedException('Chưa đăng nhập');
+  if (session.user.banned) throw new ForbiddenException('Tài khoản đã bị khoá');
+  if (session.user.role !== Role.ADMIN) throw new ForbiddenException('Tài khoản không có quyền admin');
+  return session.user;
+}
 
-    const provided = extractAdminKey(headers as Record<string, string | undefined>);
-    if (!isAdminKey(provided)) {
-      throw new UnauthorizedException('Admin key không hợp lệ');
-    }
-  })
+// Trả về null thay vì throw — dùng cho chỗ cần fallback sang cơ chế auth khác
+// (tenantAuth.plugin.ts) hoặc chỉ cần biết có phải admin hay không.
+export async function getAdminUser(headers: Headers): Promise<AuthUser | null> {
+  const session = await auth.api.getSession({ headers });
+  if (!session || session.user.banned) return null;
+  return session.user.role === Role.ADMIN ? session.user : null;
+}
+
+export const adminAuthPlugin = new Elysia({ name: 'admin-auth' })
+  .resolve(async ({ request }) => ({ user: await resolveAdminUser(request.headers) }))
   .as('scoped');

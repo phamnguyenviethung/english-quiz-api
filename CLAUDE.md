@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Runtime: **Bun** + TypeScript
 - API: **ElysiaJS** (`elysia`, `@elysiajs/cors`, `@elysiajs/openapi`)
 - DB: **Drizzle ORM** + PostgreSQL (`pg`)
+- Auth: **Better Auth** (session + role admin, `src/configs/auth.config.ts`) cho `/admin/*`; tenant API key cho `/english/*`
 - Cache/Queue: **IORedis** + **BullMQ**
 - LLM: **OpenRouter** (`@openrouter/sdk`)
 - Validation: **Zod**
@@ -28,4 +29,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Docs
 
-- Folder: `/docs/**` — tham khảo `question-pool.md`, `english-config.md`, `generate-question-common-rule.md`. Update docs khi sửa feature tương ứng.
+- Folder: `/docs/**` — tham khảo `question-pool.md`, `english-config.md`, `generate-question-common-rule.md`, `admin-auth.md`, `tenant-auth.md`. Update docs khi sửa feature tương ứng.

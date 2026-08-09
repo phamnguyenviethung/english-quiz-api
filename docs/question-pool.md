@@ -20,7 +20,7 @@ Pool được nạp đầy bởi 3 cơ chế, tất cả dùng chung 1 engine (`
 
 | Cơ chế        | Trigger                                         | Scope bucket                                                                                | Target check                                  | Thực thi                        |
 | ------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------- |
-| **On-demand** | `POST /english/pool/fill` (chỉ `ADMIN_API_KEY`) | 1 bucket cụ thể                                                                             | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
+| **On-demand** | `POST /english/pool/fill` (chỉ tài khoản admin) | 1 bucket cụ thể                                                                             | `ratio` — `< ceil(maxPerBucket*0.5)`          | BullMQ queue                    |
 | **Scheduled** | cron (`pool_refill_schedule`)                   | tất cả bucket thiếu                                                                         | `target` — `< maxPerBucket`                   | BullMQ flow                     |
 | **Manual**    | `POST /admin/pool/refill`                       | mặc định tất cả bucket (`scope=all`, hoặc `deficient`), lọc được theo `filter`/`bucketKeys` | không lọc (`all`) hoặc `target` (`deficient`) | In-process, bounded concurrency |
 
@@ -337,7 +337,7 @@ Parent job (pool-refill-scan)
 
 ## Manual Fill
 
-`POST /admin/pool/refill` — yêu cầu `ADMIN_API_KEY` (không phải tenant key), gọi `poolRefillService.runManualRefill({ models, countPerBucket, scope, filter, bucketKeys })`.
+`POST /admin/pool/refill` — yêu cầu tài khoản admin (không phải tenant key), gọi `poolRefillService.runManualRefill({ models, countPerBucket, scope, filter, bucketKeys })`.
 
 - Không dùng BullMQ — chạy in-process bằng `runWithConcurrency`, concurrency = `question_pool.manualFillConcurrency`.
 - `models` bỏ trống → random trong mọi model bật `manualEnabled`; truyền tường minh → random trong đúng tập đó. **Random lại ở từng bucket**, không khoá cứng cả run vào 1 model, nên một lần refill trải đều trên các model admin chọn. `manualProvider` luôn lấy theo model được chọn cho bucket đó. Model không tồn tại trong `ai_models`, hoặc `isActive=false` / `manualEnabled=false` → 400 (`resolveStudyModels` ở `aiClient.config.ts`); khác `resolveStudyModel` không validate, vì ở đây id đến từ dropdown admin nên id lạ là lỗi nhập liệu chứ không phải override có chủ ý.

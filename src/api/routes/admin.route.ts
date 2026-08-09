@@ -20,11 +20,11 @@ import { adminAuthPlugin } from '@/api/plugins/adminAuth.plugin';
 import adminController from '@/api/controllers/admin.controller';
 
 const ADMIN_AUTH_DESCRIPTION =
-  'Yêu cầu ADMIN_API_KEY qua header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer <ADMIN_API_KEY>`).';
+  'Yêu cầu tài khoản `role = "admin"` qua `Authorization: Bearer <session token>` (hoặc cookie phiên đăng nhập).';
 
-// Toàn bộ /admin/* yêu cầu ADMIN_API_KEY (adminAuthPlugin). Dùng để tạo tenant,
-// cấp/thu hồi API key, và gán allow-list topic/quizType. Handler chỉ wire schema +
-// gọi controller.
+// Toàn bộ /admin/* yêu cầu session admin của Better Auth (adminAuthPlugin). Dùng để
+// tạo tenant, cấp/thu hồi API key, và gán allow-list topic/quizType. Handler chỉ wire
+// schema + gọi controller.
 export const adminRoute = new Elysia({ prefix: '/admin' })
   .use(adminAuthPlugin)
 

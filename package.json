@@ -16,6 +16,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed:ai-models": "bun --env-file=.env.local run src/core/db/seeds/ai-models.seed.ts",
     "db:seed:tenant": "bun --env-file=.env.local run src/core/db/seeds/tenant.seed.ts",
+    "db:seed:admin": "bun --env-file=.env.local run src/core/db/seeds/admin-user.seed.ts",
+    "auth:generate": "bunx @better-auth/cli@latest generate --config src/configs/auth.config.ts --output src/core/db/schema/auth.ts",
     "docker:build": "docker build -t english-quiz-api .",
     "docker:run": "docker run --env-file .env english-quiz-api"
   },
@@ -37,6 +39,7 @@
     "@elysiajs/cors": "^1.4.1",
     "@elysiajs/openapi": "^1.4.14",
     "@openrouter/sdk": "^0.12.35",
+    "better-auth": "^1.6.26",
     "bullmq": "^5.69.3",
     "dayjs": "^1.11.19",
     "drizzle-orm": "^0.45.1",

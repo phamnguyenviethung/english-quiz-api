@@ -4,7 +4,9 @@
 
 ## 1. Tổng Quan
 
-Mỗi client (bot/server) là một **tenant**. Tenant xác thực mỗi request bằng **API key Bearer** và chỉ được **đọc quiz** — sinh câu hỏi, lấy câu từ pool, đọc danh sách chủ đề/dạng quiz. Tenant không tự sửa config, tạo topic, nạp pool hay xem cron — các việc đó dành cho dashboard quản trị (`ADMIN_API_KEY`). Trong phạm vi đọc quiz, tenant còn bị giới hạn thêm bởi:
+> Phía quản trị (đăng nhập admin bằng Better Auth) nằm ở [`admin-auth.md`](./admin-auth.md).
+
+Mỗi client (bot/server) là một **tenant**. Tenant xác thực mỗi request bằng **API key Bearer** và chỉ được **đọc quiz** — sinh câu hỏi, lấy câu từ pool, đọc danh sách chủ đề/dạng quiz. Tenant không tự sửa config, tạo topic, nạp pool hay xem cron — các việc đó dành cho **tài khoản admin** của dashboard. Trong phạm vi đọc quiz, tenant còn bị giới hạn thêm bởi:
 
 - **Topic allow-list**: tenant được truy cập topic nào (hoặc `allowAllTopics`).
 - **QuizType allow-list**: tenant được truy cập quizType nào (hoặc `allowAllQuizTypes`).
@@ -15,9 +17,11 @@ Data quiz (topic/pool/config) vẫn **global dùng chung** — không có cột 
 Client ──Authorization: Bearer eqk_<random>──► /english/*
    │
    ├─ tenantAuth.resolve:
-   │     ├─ key khớp ADMIN_API_KEY? → ADMIN_TENANT (full quyền, 0 query DB) ──┐
-   │     └─ else: lookup key (plaintext) WHERE key = raw AND isActive          │
-   │              → check tenant active → inject ctx.tenant                    │
+   │     ├─ token có prefix `eqk_`? → lookup key (plaintext)                   │
+   │     │       WHERE key = raw AND isActive → check tenant active            │
+   │     │       → inject ctx.tenant                                           │
+   │     └─ else: auth.api.getSession → session role admin?                    │
+   │              → ADMIN_TENANT (full quyền) ────────────────────────────────┐
    │                                                                           │
    ├─ macro auth: { admin } → route admin-only mà tenant không phải admin ◄────┤
    │                          → 403                                            │
@@ -26,17 +30,20 @@ Client ──Authorization: Bearer eqk_<random>──► /english/*
                                                             allow-list
 ```
 
-### Admin key là super key
+### Session admin là super key
 
-`ADMIN_API_KEY` dùng được ở **mọi** endpoint, không riêng `/admin/*`. Khi request mang admin key, `tenantAuthPlugin` trả về `ADMIN_TENANT` — một `TenantContext` **ảo** (`src/api/plugins/tenantAuth.plugin.ts`) có `isAdmin: true` + `allowAllTopics` + `allowAllQuizTypes`, nên pass hết guard phía sau (kể cả endpoint admin-only) mà không cần query DB.
+Tài khoản `role = "admin"` (Better Auth) dùng được ở **mọi** endpoint, không riêng `/admin/*`. Khi request mang session admin, `tenantAuthPlugin` trả về `ADMIN_TENANT` — một `TenantContext` **ảo** (`src/api/plugins/tenantAuth.plugin.ts`) có `isAdmin: true` + `allowAllTopics` + `allowAllQuizTypes`, nên pass hết guard phía sau (kể cả endpoint admin-only).
 
-| Key gửi lên                                 | `/admin/*` | `/english/*`                           |
-| ------------------------------------------- | ---------- | -------------------------------------- |
-| `ADMIN_API_KEY` (Bearer hoặc `x-admin-key`) | ✅ full    | ✅ full — kể cả endpoint admin-only    |
-| Tenant key `eqk_...` (Bearer)               | ❌ 401     | ✅ chỉ route đọc quiz, theo allow-list |
-| Không có / sai                              | ❌ 401     | ❌ 401                                 |
+| Gửi lên                                            | `/admin/*` | `/english/*`                           |
+| -------------------------------------------------- | ---------- | -------------------------------------- |
+| Session admin (Bearer session token hoặc cookie)   | ✅ full    | ✅ full — kể cả endpoint admin-only    |
+| Tenant key `eqk_...` (Bearer)                      | ❌ 401     | ✅ chỉ route đọc quiz, theo allow-list |
+| Session `role = "user"`                            | ❌ 403     | ❌ 401                                 |
+| Không có / sai                                     | ❌ 401     | ❌ 401                                 |
 
-Mục đích: dashboard quản trị chỉ cần cầm **1 secret** cho cả hai phía. Discord bot vẫn dùng tenant key giới hạn như cũ.
+Mục đích: admin đăng nhập **một lần** là dùng được cả hai phía, không cần cấp tenant key riêng cho dashboard. Discord bot vẫn dùng tenant key giới hạn như cũ.
+
+Hai loại token đi chung header `Authorization: Bearer` và được phân biệt bằng **prefix `eqk_`** — nhờ vậy request của bot không phải trả thêm một lượt query session.
 
 Lưu ý khi đọc code: `ADMIN_TENANT.id = 0` và `name = '__admin__'` **không ứng với row nào** trong bảng `tenants`. An toàn vì `tenantId` không xuống tới tầng data (data quiz là global). Phân biệt bằng cờ `TenantContext.isAdmin === true`.
 
@@ -48,8 +55,7 @@ Lưu ý khi đọc code: `ADMIN_TENANT.id = 0` và `name = '__admin__'` **không
 | `src/core/services/tenant/tenant.service.ts` | CRUD tenant, set allow-list, build `TenantContext`                                                                 |
 | `src/core/services/tenant/apiKey.service.ts` | Generate/verify API key (plaintext lookup), issue/list/revoke                                                      |
 | `src/api/plugins/tenantAuth.plugin.ts`       | Resolve tenant (+ `ADMIN_TENANT`) + macro `auth` (admin-only guard) + `assertTopicAllowed`/`assertQuizTypeAllowed` |
-| `src/api/plugins/adminAuth.plugin.ts`        | Guard `/admin/*` bằng `ADMIN_API_KEY`                                                                              |
-| `src/api/common/adminKey.ts`                 | Đọc + so khớp `ADMIN_API_KEY` (dùng chung 2 plugin trên)                                                           |
+| `src/api/plugins/adminAuth.plugin.ts`        | Guard `/admin/*` bằng session admin; export `getAdminUser` dùng chung — xem [`admin-auth.md`](./admin-auth.md)     |
 | `src/api/routes/admin.route.ts`              | Endpoint quản trị tenant/key/grant                                                                                 |
 | `src/api/routes/english.route.ts`            | Áp guard `auth: true` (đọc quiz) / `auth: { admin: true }` (quản trị) + allow-list check                           |
 | `src/api/common/errorHandler.ts`             | Map exception → HTTP status (401/403/404/400/409/500)                                                              |
@@ -77,20 +83,20 @@ Lưu ý khi đọc code: `ADMIN_TENANT.id = 0` và `name = '__admin__'` **không
 
 Tenant key chỉ đọc quiz. Có 2 tầng giới hạn:
 
-1. **Admin-only trên `/english/*`**: các route quản trị (nạp pool, sửa config, tạo topic, xem cron) khai báo `auth: { admin: true }` — chỉ `ADMIN_API_KEY` gọi được, tenant key trả **403**. Các route còn lại (đọc quiz) chỉ cần `auth: true` — mọi tenant key hợp lệ dùng được.
+1. **Admin-only trên `/english/*`**: các route quản trị (nạp pool, sửa config, tạo topic, xem cron) khai báo `auth: { admin: true }` — chỉ session admin gọi được, tenant key trả **403**. Các route còn lại (đọc quiz) chỉ cần `auth: true` — mọi tenant key hợp lệ dùng được.
 
-   | Nhóm                           | Route                                                                                                                                                                               | Guard                   |
-   | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-   | Đọc quiz (mọi tenant key)      | `/quiz-types`, `/generate/:quizType`, `/generate-reading`, `/pool/pop`, `/pool/count`, `/pool/questions`, `/pool/models`, `/pool/pick-quiz-type`, `/topics`, `/topics/random-pairs` | `auth: true`            |
-   | Quản trị (chỉ `ADMIN_API_KEY`) | `POST /pool/fill`, `GET /config`, `GET /config/records`, `PATCH /config/:recordKey`, `POST /config/:recordKey/reset`, `POST /topics`, `GET /cron/runs`, `GET /cron/runs/:runId`     | `auth: { admin: true }` |
+   | Nhóm                          | Route                                                                                                                                                                               | Guard                   |
+   | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+   | Đọc quiz (mọi tenant key)     | `/quiz-types`, `/generate/:quizType`, `/generate-reading`, `/pool/pop`, `/pool/count`, `/pool/questions`, `/pool/models`, `/pool/pick-quiz-type`, `/topics`, `/topics/random-pairs` | `auth: true`            |
+   | Quản trị (chỉ session admin)  | `POST /pool/fill`, `GET /config`, `GET /config/records`, `PATCH /config/:recordKey`, `POST /config/:recordKey/reset`, `POST /topics`, `GET /cron/runs`, `GET /cron/runs/:runId`     | `auth: { admin: true }` |
 
 2. **Topic / quizType allow-list**: trong các route đọc quiz, tenant còn bị giới hạn theo `tenant_topic_access` / `tenant_quiz_type_access` (hoặc cờ `allowAllTopics` / `allowAllQuizTypes`) — xem [`question-pool.md`](./question-pool.md) và mục 6 bên dưới.
 
 ## 6. Enforcement
 
-- **Mọi `/english/*` yêu cầu Bearer API key hợp lệ** (`tenantAuthPlugin`). Thiếu/sai key → **401**. Gọi route admin-only bằng tenant key → **403**. Topic/quizType ngoài allow-list → **403**.
-- `ADMIN_API_KEY` được check **trước** tenant lookup (string compare rẻ hơn 3 round-trip DB) và bỏ qua toàn bộ check admin-only/allow-list. Key không khớp thì rơi xuống nhánh tenant bình thường.
-- `/health` mở (không auth). `/queues` (bull-board) hiện để mở — có thể bọc `adminAuthPlugin` ở phase sau.
+- **Mọi `/english/*` yêu cầu tenant key hợp lệ hoặc session admin** (`tenantAuthPlugin`). Thiếu/sai → **401**. Gọi route admin-only bằng tenant key → **403**. Topic/quizType ngoài allow-list → **403**.
+- Token có prefix `eqk_` đi thẳng nhánh tenant lookup; token khác được coi là session token của Better Auth. Session admin bỏ qua toàn bộ check admin-only/allow-list.
+- `/health` mở (không auth). `/queues` (bull-board) yêu cầu **cookie phiên admin** — check ở hook global trong `src/api/api.ts`.
 - `topicId = null` (bucket no-topic) luôn được phép truy cập.
 
 ### Response envelope
@@ -110,7 +116,7 @@ Mọi response dùng envelope thống nhất (`src/api/common/response.ts`):
 
 ## 7. Admin API (`/admin/*`)
 
-Yêu cầu header `x-admin-key: <ADMIN_API_KEY>` (hoặc `Authorization: Bearer <ADMIN_API_KEY>`). Cùng key này dùng luôn được cho `/english/*` — xem [Admin key là super key](#admin-key-là-super-key).
+Yêu cầu tài khoản `role = "admin"`: `Authorization: Bearer <session token>` hoặc cookie phiên đăng nhập. Cùng phiên đó dùng luôn được cho `/english/*` — xem [Session admin là super key](#session-admin-là-super-key) và [`admin-auth.md`](./admin-auth.md).
 
 | Method & Path                              | Mô tả                                                                                             |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
@@ -144,29 +150,27 @@ Giá (`pricePromptPerToken`, `priceCompletionPerToken`) chỉ đọc — nạp t
 
 ## 8. Env & Boot
 
-- `ADMIN_API_KEY` (bắt buộc) — secret bảo vệ `/admin/*` **và** là super key cho `/english/*`. `src/index.ts` gọi `checkEnv(['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY'])` → fail fast nếu thiếu.
-
-> Vì key này giờ mở được toàn bộ API (kể cả các endpoint tốn LLM token), dùng chuỗi random đủ dài ở môi trường thật — đừng để giá trị placeholder như trong `.env.example`.
+Phía tenant không cần env riêng — key nằm trong DB. Env của phía admin (`BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `TRUSTED_ORIGINS`, …) xem [`admin-auth.md`](./admin-auth.md) § Env.
 
 ## 9. Setup & Test nhanh
 
 ```bash
-# 1. Migration
+# 1. Migration + admin đầu tiên
 bun run db:generate && bun run db:migrate
+bun run db:seed:admin
 
 # 2. Seed tenant demo + API key (in plaintext key ra console)
 bun run db:seed:tenant
 
-# 3. Test (thay <KEY> = plaintext từ bước 2, <ADMIN> = ADMIN_API_KEY)
-curl localhost:3399/health                                          # 200 (mở)
-curl localhost:3399/english/quiz-types                              # 401 (thiếu key)
+# 3. Test (<KEY> = plaintext từ bước 2, <TOKEN> = set-auth-token khi đăng nhập)
+curl localhost:3399/health                                                # 200 (mở)
+curl localhost:3399/english/quiz-types                                    # 401 (thiếu key)
 curl -H "Authorization: Bearer <KEY>" localhost:3399/english/quiz-types   # 200
-curl -H "x-admin-key: <ADMIN>" localhost:3399/admin/tenants         # 200
 
-# Admin key làm super key trên /english/* (cả 2 header đều được), kể cả route admin-only
-curl -H "x-admin-key: <ADMIN>" localhost:3399/english/quiz-types            # 200
-curl -H "Authorization: Bearer <ADMIN>" localhost:3399/english/topics       # 200
-curl -H "x-admin-key: <ADMIN>" localhost:3399/english/config                # 200
+# Session admin làm super key trên cả /admin/* lẫn /english/*, kể cả route admin-only
+curl -H "Authorization: Bearer <TOKEN>" localhost:3399/admin/tenants      # 200
+curl -H "Authorization: Bearer <TOKEN>" localhost:3399/english/topics     # 200
+curl -H "Authorization: Bearer <TOKEN>" localhost:3399/english/config     # 200
 
 # Tenant key đọc quiz được nhưng KHÔNG leo thang lên admin hay endpoint admin-only
 curl -H "Authorization: Bearer <KEY>" localhost:3399/admin/tenants  # 401
@@ -175,7 +179,6 @@ curl -H "Authorization: Bearer <KEY>" localhost:3399/english/config # 403
 
 ## 10. Out of scope (phase sau)
 
-- JWT / session-based auth (hiện chỉ API key server-to-server).
+- Hash tenant key trong DB (hiện lưu plaintext).
 - Rate limiting per-tenant.
-- Guard cho `/queues` (bull-board).
 - Per-tenant config override (config hiện global).

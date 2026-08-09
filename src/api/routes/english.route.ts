@@ -22,10 +22,11 @@ import {
 import { tenantAuthPlugin } from '@/api/plugins/tenantAuth.plugin';
 import englishController from '@/api/controllers/english.controller';
 
-// Mọi route /english/* yêu cầu xác thực tenant qua Bearer API key (tenantAuthPlugin).
+// Mọi route /english/* yêu cầu xác thực qua tenantAuthPlugin: tenant API key Bearer
+// (`eqk_...`) hoặc session admin của Better Auth.
 // Tenant key chỉ đọc quiz → `auth: true`. Endpoint quản trị (nạp pool, sửa config,
-// tạo topic, xem cron) chỉ chấp nhận ADMIN_API_KEY → `auth: { admin: true }`.
-// ADMIN_API_KEY dùng được ở đây như super key: qua mọi guard admin và bỏ qua
+// tạo topic, xem cron) chỉ chấp nhận tài khoản admin → `auth: { admin: true }`.
+// Session admin dùng được ở đây như super key: qua mọi guard admin và bỏ qua
 // allow-list topic/quizType — xem ADMIN_TENANT trong tenantAuth.plugin.ts.
 export const englishRoute = new Elysia({ prefix: '/english' })
   .use(tenantAuthPlugin)
@@ -233,7 +234,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       summary: 'Trigger pool refill',
       description:
         'Enqueue job sinh thêm câu hỏi cho bucket nếu dưới ngưỡng refill. Bất đồng bộ — response chỉ xác nhận đã ' +
-        'enqueue, không đợi job hoàn tất. Chỉ dùng được với ADMIN_API_KEY.',
+        'enqueue, không đợi job hoàn tất. Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -258,14 +259,14 @@ export const englishRoute = new Elysia({ prefix: '/english' })
     }
   })
 
-  // ── Config (chỉ dùng được với ADMIN_API_KEY) ──────────────────────────────────
+  // ── Config (chỉ dùng được với tài khoản admin) ──────────────────────────────────
   .get('/config', () => ok(englishController.getConfigSnapshot()), {
     auth: { admin: true },
     detail: {
       tags: ['English / Config'],
       summary: 'Get current config snapshot',
       description:
-        'Snapshot config runtime hiện tại (question_pool, quiz_distribution, job_flags). Chỉ dùng được với ADMIN_API_KEY.',
+        'Snapshot config runtime hiện tại (question_pool, quiz_distribution, job_flags). Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -282,7 +283,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       summary: 'List config records',
       description:
         'Danh sách đầy đủ config record (kèm validation/uiSchema/value/defaultValue) để build admin UI. ' +
-        'Chỉ dùng được với ADMIN_API_KEY.',
+        'Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -311,7 +312,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
         summary: 'Update a config record',
         description:
           'Cập nhật giá trị 1 config record. recordKey không tồn tại throw lỗi nội bộ (500), không phải 404. ' +
-          'Chỉ dùng được với ADMIN_API_KEY.',
+          'Chỉ dùng được với tài khoản admin.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -328,7 +329,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
     detail: {
       tags: ['English / Config'],
       summary: 'Reset config record to default',
-      description: 'Reset 1 config record về giá trị mặc định. Chỉ dùng được với ADMIN_API_KEY.',
+      description: 'Reset 1 config record về giá trị mặc định. Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -383,7 +384,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       detail: {
         tags: ['English / Topics'],
         summary: 'Create topic',
-        description: 'Tạo topic mới. `name` unique — trùng tên trả 409. Chỉ dùng được với ADMIN_API_KEY.',
+        description: 'Tạo topic mới. `name` unique — trùng tên trả 409. Chỉ dùng được với tài khoản admin.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -405,7 +406,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       summary: 'List recent cron job runs',
       description:
         'Danh sách các lần chạy cron gần nhất (question_gen/pool_refill/manual_fill), mặc định 8 run. Trả về ' +
-        'FULL row (bao gồm errorStack/metadata) — không phải shape rút gọn. Chỉ dùng được với ADMIN_API_KEY.',
+        'FULL row (bao gồm errorStack/metadata) — không phải shape rút gọn. Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -422,7 +423,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       tags: ['English / Cron Tracking'],
       summary: 'Get cron run detail',
       description:
-        'Chi tiết 1 lần chạy cron kèm bucket + model attempt. runId không tồn tại trả 404. Chỉ dùng được với ADMIN_API_KEY.',
+        'Chi tiết 1 lần chạy cron kèm bucket + model attempt. runId không tồn tại trả 404. Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -445,7 +446,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       description:
         'Tổng hợp token + chi phí USD từ các lần gọi AI (english_cron_job_model_attempts), gộp theo ngày ' +
         '(`groupBy=day`, mặc định) hoặc theo model (`groupBy=model`). `costUsd` chỉ cộng các lần gọi bằng model ' +
-        'đã có giá cache — model chưa sync giá đóng góp 0. Chỉ dùng được với ADMIN_API_KEY.',
+        'đã có giá cache — model chưa sync giá đóng góp 0. Chỉ dùng được với tài khoản admin.',
       security: [{ bearerAuth: [] }]
     },
     response: {

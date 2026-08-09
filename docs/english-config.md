@@ -128,7 +128,7 @@ Record:
 
 Mỗi item có `name` (unique, dùng làm BullMQ `jobSchedulerId`) và `cron` (cron expression, validate bằng `cron-parser` ngay ở Zod schema — sai cú pháp → 400 khi PATCH). Đổi giá trị này reconcile BullMQ job schedulers ngay lập tức, không cần restart (xem §1).
 
-Manual-fill (`/admin/pool/refill`) không có flag chặn — chủ động trigger, dùng `ADMIN_API_KEY` riêng nên không cần feature flag.
+Manual-fill (`/admin/pool/refill`) không có flag chặn — chủ động trigger, yêu cầu tài khoản admin nên không cần feature flag.
 
 ## 6. API
 
@@ -139,7 +139,7 @@ Service này không có UI riêng — config được thao tác qua HTTP API (pr
 - `PATCH /config/:recordKey` body `{ value }` — validate rồi update 1 record, refresh snapshot ngay.
 - `POST /config/:recordKey/reset` — ghi default typed value qua cùng validation path.
 
-Tất cả các route này chỉ dùng được với `ADMIN_API_KEY` (xem `docs/tenant-auth.md`). Server-side validation trong service là source of truth. `uiSchema`/`validation` metadata vẫn được trả về để client (nếu có) render typed controls.
+Tất cả các route này chỉ dùng được với tài khoản admin (xem `docs/admin-auth.md`). Server-side validation trong service là source of truth. `uiSchema`/`validation` metadata vẫn được trả về để client (nếu có) render typed controls.
 
 ## 7. Quy Tắc Khi Thêm Config Mới
 

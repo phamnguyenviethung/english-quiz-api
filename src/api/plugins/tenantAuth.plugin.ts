@@ -1,13 +1,13 @@
 import { Elysia } from 'elysia';
-import apiKeyService from '@/core/services/tenant/apiKey.service';
+import apiKeyService, { API_KEY_PREFIX } from '@/core/services/tenant/apiKey.service';
 import type { TenantContext } from '@/core/services/tenant/tenant.service';
 import { ForbiddenException, UnauthorizedException } from '@/core/exceptions';
-import { extractAdminKey, isAdminKey } from '@/api/common/adminKey';
+import { getAdminUser } from '@/api/plugins/adminAuth.plugin';
 
 /**
- * Context ảo cho request dùng ADMIN_API_KEY: bỏ qua allow-list topic/quizType
- * và vượt qua guard admin-only. Nhờ vậy admin key dùng được ở cả /admin/* lẫn
- * /english/* mà không cần cấp tenant key riêng cho dashboard.
+ * Context ảo cho request của tài khoản admin (Better Auth): bỏ qua allow-list
+ * topic/quizType và vượt qua guard admin-only. Nhờ vậy admin đăng nhập một lần là
+ * dùng được cả /admin/* lẫn /english/* mà không cần cấp tenant key riêng cho dashboard.
  *
  * id = 0 an toàn vì tenantId không xuống tới tầng data (data quiz là global,
  * xem comment ở src/core/db/schema/main.ts). Constant này không được mutate ở đâu.
@@ -31,38 +31,41 @@ function extractBearer(authorization: string | undefined): string | null {
 }
 
 // Tenant key chỉ được đọc quiz. Endpoint quản trị nằm dưới /english/* (nạp
-// pool, sửa config, tạo topic, xem cron) chỉ chấp nhận ADMIN_API_KEY.
+// pool, sửa config, tạo topic, xem cron) chỉ chấp nhận tài khoản admin.
 function assertAdmin(tenant: TenantContext): void {
   if (!tenant.isAdmin) {
-    throw new ForbiddenException('Endpoint này chỉ dành cho ADMIN_API_KEY');
+    throw new ForbiddenException('Endpoint này chỉ dành cho tài khoản admin');
   }
 }
 
 /**
- * Plugin xác thực tenant qua API key Bearer.
+ * Plugin xác thực cho /english/*: tenant API key Bearer **hoặc** session admin.
  *
  * - `.resolve` inject `tenant: TenantContext` vào mọi request dùng plugin này.
- * - macro `auth` nhận `{ admin }` để giới hạn route cho ADMIN_API_KEY.
- * - ADMIN_API_KEY được chấp nhận như super key → ADMIN_TENANT (full quyền).
+ * - macro `auth` nhận `{ admin }` để giới hạn route cho tài khoản admin.
+ * - Session admin được chấp nhận như super key → ADMIN_TENANT (full quyền).
  *
  * Dùng: `.use(tenantAuthPlugin)` ở đầu route module, rồi khai báo `{ auth: true }`
- * (mọi tenant key hợp lệ) hoặc `{ auth: { admin: true } }` (chỉ ADMIN_API_KEY)
- * cho từng route.
+ * (mọi tenant key hợp lệ) hoặc `{ auth: { admin: true } }` (chỉ admin) cho từng route.
  */
 export const tenantAuthPlugin = new Elysia({ name: 'tenant-auth' })
-  .resolve(async ({ headers }) => {
-    // Check admin key trước: string compare rẻ hơn nhiều so với 3 round-trip DB
-    // của verifyKey + getTenantContext. Không khớp thì rơi xuống nhánh tenant.
-    const adminRaw = extractAdminKey(headers as Record<string, string | undefined>);
-    if (isAdminKey(adminRaw)) return { tenant: ADMIN_TENANT };
-
+  .resolve(async ({ headers, request }) => {
+    // `Authorization: Bearer` giờ mang 2 loại token: tenant key (`eqk_...`) và session
+    // token của Better Auth. Phân biệt bằng prefix để traffic bot không phải trả thêm
+    // một lượt query session mỗi request.
     const raw = extractBearer(headers.authorization);
-    if (!raw) throw new UnauthorizedException('Thiếu Bearer API key');
 
-    const tenant = await apiKeyService.verifyKey(raw);
-    if (!tenant) throw new UnauthorizedException('API key không hợp lệ hoặc đã bị thu hồi');
+    if (raw?.startsWith(API_KEY_PREFIX)) {
+      const tenant = await apiKeyService.verifyKey(raw);
+      if (!tenant) throw new UnauthorizedException('API key không hợp lệ hoặc đã bị thu hồi');
+      return { tenant };
+    }
 
-    return { tenant };
+    // Không phải tenant key → thử session Better Auth (bearer token hoặc cookie).
+    const adminUser = await getAdminUser(request.headers);
+    if (adminUser) return { tenant: ADMIN_TENANT };
+
+    throw new UnauthorizedException('Thiếu tenant API key hợp lệ hoặc phiên đăng nhập admin');
   })
   .macro({
     auth: (config: { admin?: boolean } | boolean) => ({

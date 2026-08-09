@@ -20,8 +20,9 @@ process.on('SIGINT', shutdown);
 
 const start = async (): Promise<void> => {
   try {
-    // 0. Validate env bắt buộc (fail fast nếu thiếu ADMIN_API_KEY cho /admin/*)
-    checkEnv(['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY']);
+    // 0. Validate env bắt buộc (fail fast nếu thiếu secret của Better Auth — không có
+    //    nó thì mọi route /admin/* và /english/* admin-only đều không đăng nhập được)
+    checkEnv(['DATABASE_URL', 'REDIS_URL', 'BETTER_AUTH_SECRET', 'BETTER_AUTH_URL']);
     // 1. Seed + load config snapshot vào memory (mọi service đọc snapshot đồng bộ)
     await ensureEnglishConfigSeeded();
     // 2. Init BullMQ english jobs (question-gen, pool-refill, manual-fill)
