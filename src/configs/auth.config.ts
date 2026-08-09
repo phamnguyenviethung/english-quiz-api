@@ -4,6 +4,7 @@ import { admin, bearer, oauthPopup, openAPI } from 'better-auth/plugins';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import * as authSchema from '@/core/db/schema/auth';
+import { RESET_PASSWORD_EXPIRES_MINUTES, sendResetPasswordEmail } from '@/core/services/mail/resetPassword.mail';
 
 /**
  * Better Auth — xác thực người dùng quản trị (thay cho ADMIN_API_KEY cũ).
@@ -54,9 +55,18 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 12,
-    // Chưa có mail provider nên không bắt verify email. Quyền admin không đến từ
-    // email đã verify mà từ cột `role` (chỉ promote thủ công/seed).
-    requireEmailVerification: false
+    // Không bắt verify email: quyền admin không đến từ email đã verify mà từ cột
+    // `role` (chỉ promote thủ công/seed). Mail provider hiện chỉ dùng cho reset password.
+    requireEmailVerification: false,
+    resetPasswordTokenExpiresIn: RESET_PASSWORD_EXPIRES_MINUTES * 60,
+    // Đổi mật khẩu = thu hồi mọi phiên cũ (kể cả phiên của kẻ đã chiếm tài khoản).
+    revokeSessionsOnPasswordReset: true,
+    sendResetPassword: async ({ user, url }) => {
+      await sendResetPasswordEmail({ user, url });
+    },
+    onPasswordReset: async ({ user }) => {
+      logger.info(`[Auth] Reset password thành công cho ${user.email}`);
+    }
   },
   socialProviders: googleEnabled
     ? {
@@ -78,7 +88,12 @@ export const auth = betterAuth({
   rateLimit: {
     enabled: true,
     window: 60,
-    max: 30
+    max: 30,
+    // Chặt tay hơn mức chung: 2 endpoint này gửi mail thật và là bề mặt brute-force token.
+    customRules: {
+      '/request-password-reset': { window: 60, max: 3 },
+      '/reset-password': { window: 60, max: 5 }
+    }
   },
   plugins: [admin({ defaultRole: Role.USER, adminRoles: [Role.ADMIN] }), bearer(), oauthPopup(), openAPI()]
 });

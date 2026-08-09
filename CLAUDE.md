@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - DB: **Drizzle ORM** + PostgreSQL (`pg`)
 - Auth: **Better Auth** (session + role admin, `src/configs/auth.config.ts`) cho `/admin/*`; tenant API key cho `/english/*`
 - Cache/Queue: **IORedis** + **BullMQ**
+- Mail: **Resend** (`src/configs/mail.config.ts`) — hiện chỉ dùng cho reset password
 - LLM: **OpenRouter** (`@openrouter/sdk`)
 - Validation: **Zod**
 - Logger: **Winston** (console-only, không có Discord transport)

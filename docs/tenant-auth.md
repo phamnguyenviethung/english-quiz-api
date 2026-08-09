@@ -34,12 +34,12 @@ Client ──Authorization: Bearer eqk_<random>──► /english/*
 
 Tài khoản `role = "admin"` (Better Auth) dùng được ở **mọi** endpoint, không riêng `/admin/*`. Khi request mang session admin, `tenantAuthPlugin` trả về `ADMIN_TENANT` — một `TenantContext` **ảo** (`src/api/plugins/tenantAuth.plugin.ts`) có `isAdmin: true` + `allowAllTopics` + `allowAllQuizTypes`, nên pass hết guard phía sau (kể cả endpoint admin-only).
 
-| Gửi lên                                            | `/admin/*` | `/english/*`                           |
-| -------------------------------------------------- | ---------- | -------------------------------------- |
-| Session admin (Bearer session token hoặc cookie)   | ✅ full    | ✅ full — kể cả endpoint admin-only    |
-| Tenant key `eqk_...` (Bearer)                      | ❌ 401     | ✅ chỉ route đọc quiz, theo allow-list |
-| Session `role = "user"`                            | ❌ 403     | ❌ 401                                 |
-| Không có / sai                                     | ❌ 401     | ❌ 401                                 |
+| Gửi lên                                          | `/admin/*` | `/english/*`                           |
+| ------------------------------------------------ | ---------- | -------------------------------------- |
+| Session admin (Bearer session token hoặc cookie) | ✅ full    | ✅ full — kể cả endpoint admin-only    |
+| Tenant key `eqk_...` (Bearer)                    | ❌ 401     | ✅ chỉ route đọc quiz, theo allow-list |
+| Session `role = "user"`                          | ❌ 403     | ❌ 401                                 |
+| Không có / sai                                   | ❌ 401     | ❌ 401                                 |
 
 Mục đích: admin đăng nhập **một lần** là dùng được cả hai phía, không cần cấp tenant key riêng cho dashboard. Discord bot vẫn dùng tenant key giới hạn như cũ.
 
@@ -85,10 +85,10 @@ Tenant key chỉ đọc quiz. Có 2 tầng giới hạn:
 
 1. **Admin-only trên `/english/*`**: các route quản trị (nạp pool, sửa config, tạo topic, xem cron) khai báo `auth: { admin: true }` — chỉ session admin gọi được, tenant key trả **403**. Các route còn lại (đọc quiz) chỉ cần `auth: true` — mọi tenant key hợp lệ dùng được.
 
-   | Nhóm                          | Route                                                                                                                                                                               | Guard                   |
-   | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-   | Đọc quiz (mọi tenant key)     | `/quiz-types`, `/generate/:quizType`, `/generate-reading`, `/pool/pop`, `/pool/count`, `/pool/questions`, `/pool/models`, `/pool/pick-quiz-type`, `/topics`, `/topics/random-pairs` | `auth: true`            |
-   | Quản trị (chỉ session admin)  | `POST /pool/fill`, `GET /config`, `GET /config/records`, `PATCH /config/:recordKey`, `POST /config/:recordKey/reset`, `POST /topics`, `GET /cron/runs`, `GET /cron/runs/:runId`     | `auth: { admin: true }` |
+   | Nhóm                         | Route                                                                                                                                                                               | Guard                   |
+   | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+   | Đọc quiz (mọi tenant key)    | `/quiz-types`, `/generate/:quizType`, `/generate-reading`, `/pool/pop`, `/pool/count`, `/pool/questions`, `/pool/models`, `/pool/pick-quiz-type`, `/topics`, `/topics/random-pairs` | `auth: true`            |
+   | Quản trị (chỉ session admin) | `POST /pool/fill`, `GET /config`, `GET /config/records`, `PATCH /config/:recordKey`, `POST /config/:recordKey/reset`, `POST /topics`, `GET /cron/runs`, `GET /cron/runs/:runId`     | `auth: { admin: true }` |
 
 2. **Topic / quizType allow-list**: trong các route đọc quiz, tenant còn bị giới hạn theo `tenant_topic_access` / `tenant_quiz_type_access` (hoặc cờ `allowAllTopics` / `allowAllQuizTypes`) — xem [`question-pool.md`](./question-pool.md) và mục 6 bên dưới.
 
