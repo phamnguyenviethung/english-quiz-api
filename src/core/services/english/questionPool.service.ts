@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, isNull, lte, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { englishQuestionPool, englishTopic, type InsertEnglishQuestionPool } from '@/core/db/schema/main';
@@ -171,18 +171,33 @@ function mapRowToPoolQuestion(row: typeof englishQuestionPool.$inferSelect): Poo
  * Lấy 1 câu random trong bucket (engLevel, topicId). Câu KHÔNG bị xóa/đánh dấu,
  * nên có thể được trả lại ở các lần pop sau — pool là kho câu hỏi dùng lại được.
  */
-async function popQuestion(engLevel: string, topicId: number | null = null): Promise<PoolQuestion | null> {
+/**
+ * Lấy 1 câu ngẫu nhiên trong bucket (engLevel, topicId). Không mutate row — pool là kho
+ * dùng lại được, câu vẫn nằm lại sau khi pop.
+ *
+ * `excludeIds` để client tự chống lặp câu theo từng end-user (pool không biết end-user là
+ * ai). Loại hết câu trong bucket → trả null, caller tự quyết định có pop lại không kèm
+ * exclude hay không.
+ */
+async function popQuestion(
+  engLevel: string,
+  topicId: number | null = null,
+  excludeIds: number[] = []
+): Promise<PoolQuestion | null> {
+  const conditions = [eq(englishQuestionPool.engLevel, engLevel), buildTopicCondition(topicId)];
+  if (excludeIds.length > 0) conditions.push(notInArray(englishQuestionPool.id, excludeIds));
+
   const [row] = await db
     .select()
     .from(englishQuestionPool)
-    .where(and(eq(englishQuestionPool.engLevel, engLevel), buildTopicCondition(topicId)))
+    .where(and(...conditions))
     .orderBy(sql`RANDOM()`)
     .limit(1);
 
   if (!row) return null;
 
   logger.info(
-    `[QuestionPool] Popped question id=${row.id} type=${row.quizType} model=${row.model} engLevel=${engLevel} topicId=${topicId}`
+    `[QuestionPool] Popped question id=${row.id} type=${row.quizType} model=${row.model} engLevel=${engLevel} topicId=${topicId} excluded=${excludeIds.length}`
   );
   return mapRowToPoolQuestion(row);
 }

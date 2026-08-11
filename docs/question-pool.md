@@ -5,15 +5,15 @@
 Thay vì gọi AI trực tiếp mỗi khi cần 1 câu hỏi (gây delay + rủi ro lỗi JSON), hệ thống **pre-generate** câu hỏi và lưu vào DB. Client lấy câu qua API `GET /english/pool/pop` theo **engLevel + topicId**.
 
 ```
-GET /english/pool/pop?engLevel=A2&topicId=5
+GET /english/pool/pop?engLevel=A2&topicId=5[&excludeIds=12,88,301]
      │
      ▼
- popQuestion(engLevel, topicId)  →  ORDER BY RANDOM() LIMIT 1
+ popQuestion(engLevel, topicId, excludeIds)  →  ORDER BY RANDOM() LIMIT 1
      │
   có câu ──────────► trả về (câu vẫn nằm lại pool, có thể pop lại lần sau)
      │
     null ──────────► 404 { success:false, error:{ code:"NOT_FOUND", message:"Pool trống cho bucket này" } }
-                     (chờ scheduled refill, hoặc admin gọi /pool/fill để refill ngay)
+                     (bucket rỗng, HOẶC mọi câu trong bucket đều bị excludeIds loại)
 ```
 
 Pool được nạp đầy bởi 3 cơ chế, tất cả dùng chung 1 engine (`src/core/services/english/poolRefill.service.ts`):
@@ -45,13 +45,33 @@ Pool được phân theo **3 chiều**: **`(engLevel, topicId, quizType)`**.
 
 ## popQuestion — random thuần
 
-`popQuestion(engLevel, topicId)`:
+`popQuestion(engLevel, topicId, excludeIds)`:
 
-1. `SELECT * FROM english_question_pool WHERE engLevel = ? AND (topicId = ? | topicId IS NULL) ORDER BY RANDOM() LIMIT 1`.
+1. `SELECT * FROM english_question_pool WHERE engLevel = ? AND (topicId = ? | topicId IS NULL) [AND id NOT IN (...)] ORDER BY RANDOM() LIMIT 1`.
 2. Có row → trả về `PoolQuestion`. **Không** `UPDATE`, **không** `DELETE` — câu vẫn nằm trong pool và có thể được trả lại ở lần pop sau. Pool là **kho câu hỏi dùng lại được**.
-3. Không có row nào khớp engLevel + topicId → trả `null`.
+3. Không có row nào khớp → trả `null`.
 
 > Không lọc theo `quizType` khi pop — quizType của câu trả về là ngẫu nhiên trong bucket theo `(engLevel, topicId)`.
+
+### `excludeIds` — chống lặp câu phía client
+
+Pool **không biết end-user là ai** (không có cột `used`, không có bảng progress — xem `tenant-auth.md`). Việc "user này đã gặp câu nào" thuộc về client, nên client gửi kèm danh sách id cần loại:
+
+| Khía cạnh | Hành vi                                                       |
+| --------- | ------------------------------------------------------------- |
+| Format    | CSV, vd `excludeIds=12,88,301`                                |
+| Giới hạn  | tối đa **200** id, dư bị cắt; trùng lặp được khử              |
+| Input rác | phần tử không phải số nguyên dương bị **bỏ qua**, không throw |
+| Rỗng      | không truyền / rỗng / toàn rác → không lọc gì                 |
+
+Loại hết câu trong bucket cũng trả **404** giống bucket rỗng — API không phân biệt hai trường hợp này. Client nên xử lý bằng một **ladder** giảm dần độ nghiêm ngặt, ví dụ:
+
+```text
+1. pop(engLevel, topicId,      excludeIds=seen)   → câu mới, topic đang chọn
+2. pop(engLevel, otherTopicId, excludeIds=seen)   → câu mới, topic khác
+3. pop(engLevel, topicId)                          → chấp nhận lặp
+4. 404 → báo user thử lại sau
+```
 
 ---
 
@@ -175,14 +195,14 @@ CREATE INDEX idx_question_pool_created_at ON english_question_pool ("createdAt")
 
 ### 1. `src/core/services/english/questionPool.service.ts`
 
-| Function                                    | Mô tả                                                                                        |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `getPoolCount(engLevel, quizType, topicId)` | Đếm **tổng số câu** trong bucket `(engLevel, topicId, quizType)`                             |
-| `popQuestion(engLevel, topicId)`            | `ORDER BY RANDOM() LIMIT 1`; không xóa/đánh dấu; trả `PoolQuestion \| null`                  |
-| `listQuestions(input)`                      | List có filter + phân trang cho admin UI; trả `{ items, page, pageSize, total, totalPages }` |
-| `pushQuestions(questions[])`                | Insert batch; kiểm tra capacity (tổng câu) theo từng bucket trước khi insert                 |
-| `clearPool(engLevel?, topicId?)`            | Xóa pool (filter tùy chọn theo engLevel / topicId)                                           |
-| `pickQuizType()`                            | Random quiz type theo `quiz_distribution` (weighted)                                         |
+| Function                                     | Mô tả                                                                                          |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `getPoolCount(engLevel, quizType, topicId)`  | Đếm **tổng số câu** trong bucket `(engLevel, topicId, quizType)`                               |
+| `popQuestion(engLevel, topicId, excludeIds)` | `ORDER BY RANDOM() LIMIT 1`, loại `excludeIds`; không xóa/đánh dấu; trả `PoolQuestion \| null` |
+| `listQuestions(input)`                       | List có filter + phân trang cho admin UI; trả `{ items, page, pageSize, total, totalPages }`   |
+| `pushQuestions(questions[])`                 | Insert batch; kiểm tra capacity (tổng câu) theo từng bucket trước khi insert                   |
+| `clearPool(engLevel?, topicId?)`             | Xóa pool (filter tùy chọn theo engLevel / topicId)                                             |
+| `pickQuizType()`                             | Random quiz type theo `quiz_distribution` (weighted)                                           |
 
 **`pushQuestions`**: gom bucket key `engLevel:topicId:quizType`, preload count, cập nhật in-memory sau mỗi insert trong cùng transaction để không vượt `maxPerBucket`.
 

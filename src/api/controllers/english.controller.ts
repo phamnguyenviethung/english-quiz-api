@@ -92,9 +92,24 @@ async function generateReading(input: GenerateReadingInput) {
 
 // ─── Question pool ──────────────────────────────────────────────────────────────
 
-async function popFromPool(tenant: TenantContext, engLevel: EngLevel, topicId: number | null) {
+// Số id tối đa nhận qua `excludeIds`. Chặn query string phình to — client nào cần loại
+// nhiều hơn thì gửi phần gần đây nhất.
+const MAX_EXCLUDE_IDS = 200;
+
+// CSV → number[]. Phần tử không phải số nguyên dương bị bỏ qua thay vì throw: đây là
+// filter "best effort", input rác chỉ làm mất tác dụng lọc chứ không nên làm hỏng request.
+export function parseExcludeIds(raw: string | undefined): number[] {
+  if (!raw) return [];
+  const ids = raw
+    .split(',')
+    .map((part) => Number(part.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  return [...new Set(ids)].slice(0, MAX_EXCLUDE_IDS);
+}
+
+async function popFromPool(tenant: TenantContext, engLevel: EngLevel, topicId: number | null, excludeIds: number[]) {
   assertTopicAllowed(tenant, topicId);
-  const question = await questionPoolService.popQuestion(engLevel, topicId);
+  const question = await questionPoolService.popQuestion(engLevel, topicId, excludeIds);
   if (!question) throw new NotFoundException('Pool trống cho bucket này');
   return question;
 }
@@ -216,6 +231,7 @@ function getCronUsage(input: CronUsageInput) {
 export default {
   generate,
   generateReading,
+  parseExcludeIds,
   popFromPool,
   countPool,
   listPoolQuestions,

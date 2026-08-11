@@ -104,19 +104,35 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   // ── Question pool ───────────────────────────────────────────────────────────
   .get(
     '/pool/pop',
-    async ({ query, tenant }) => ok(await englishController.popFromPool(tenant, query.engLevel, query.topicId ?? null)),
+    async ({ query, tenant }) =>
+      ok(
+        await englishController.popFromPool(
+          tenant,
+          query.engLevel,
+          query.topicId ?? null,
+          englishController.parseExcludeIds(query.excludeIds)
+        )
+      ),
     {
       auth: true,
       query: t.Object({
         engLevel: EngLevelSchema,
-        topicId: t.Optional(t.Numeric())
+        topicId: t.Optional(t.Numeric()),
+        excludeIds: t.Optional(
+          t.String({
+            description:
+              'CSV id câu hỏi cần loại, vd "12,88,301". Tối đa 200 id (dư bị cắt), phần tử không phải ' +
+              'số nguyên dương bị bỏ qua. Dùng để client tự chống lặp câu theo từng end-user.'
+          })
+        )
       }),
       detail: {
         tags: ['English / Question Pool'],
         summary: 'Pop a question from the pre-generated pool',
         description:
           'Lấy 1 câu hỏi random trong bucket (engLevel, topicId) — câu KHÔNG bị xoá, pool là kho dùng lại được. ' +
-          'topicId ngoài allow-list trả 403. Pool trống trả 404.',
+          '`excludeIds` loại thêm các câu client đã phục vụ rồi. topicId ngoài allow-list trả 403. ' +
+          'Bucket trống (hoặc mọi câu đều bị loại bởi `excludeIds`) trả 404.',
         security: [{ bearerAuth: [] }]
       },
       response: {
