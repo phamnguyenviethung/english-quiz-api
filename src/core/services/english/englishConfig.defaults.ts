@@ -45,7 +45,7 @@ function isValidCronExpression(cron: string): boolean {
   }
 }
 
-export const PoolRefillScheduleSchema = z
+const CronScheduleSchema = z
   .array(
     z.object({
       name: z.string().min(1),
@@ -54,6 +54,27 @@ export const PoolRefillScheduleSchema = z
   )
   .refine((items) => new Set(items.map((item) => item.name)).size === items.length, {
     message: 'Schedule names must be unique'
+  });
+
+export const PoolRefillScheduleSchema = CronScheduleSchema;
+export const ReadingRefillScheduleSchema = CronScheduleSchema;
+
+export const ReadingPassageSchema = z
+  .object({
+    maxPerBucket: positiveIntSchema,
+    refillThresholdRatio: z.number().min(0).max(1),
+    perBucketGenerationCap: positiveIntSchema,
+    manualFillMinCount: positiveIntSchema,
+    manualFillMaxCount: positiveIntSchema,
+    manualFillDefaultCount: positiveIntSchema,
+    manualFillConcurrency: positiveIntSchema,
+    excludeRecentTitleCount: nonNegativeIntSchema
+  })
+  .refine((value) => value.manualFillMinCount <= value.manualFillDefaultCount, {
+    message: 'manualFillDefaultCount must be >= manualFillMinCount'
+  })
+  .refine((value) => value.manualFillDefaultCount <= value.manualFillMaxCount, {
+    message: 'manualFillDefaultCount must be <= manualFillMaxCount'
   });
 
 export const QuizDistributionSchema = z
@@ -72,14 +93,18 @@ export const QuizDistributionSchema = z
 export const JobFlagsSchema = z.object({
   questionGenEnabled: z.boolean(),
   poolRefillEnabled: z.boolean(),
-  poolRefillMaxQuestionsPerRun: positiveIntSchema
+  poolRefillMaxQuestionsPerRun: positiveIntSchema,
+  readingRefillEnabled: z.boolean(),
+  readingRefillMaxPerRun: positiveIntSchema
 });
 
 export const EnglishConfigSchemas = {
   question_pool: QuestionPoolSchema,
   quiz_distribution: QuizDistributionSchema,
   job_flags: JobFlagsSchema,
-  pool_refill_schedule: PoolRefillScheduleSchema
+  pool_refill_schedule: PoolRefillScheduleSchema,
+  reading_passage: ReadingPassageSchema,
+  reading_refill_schedule: ReadingRefillScheduleSchema
 } as const;
 
 export const EnglishConfigDefaults = {
@@ -108,19 +133,34 @@ export const EnglishConfigDefaults = {
   job_flags: {
     questionGenEnabled: true,
     poolRefillEnabled: true,
-    poolRefillMaxQuestionsPerRun: 50
+    poolRefillMaxQuestionsPerRun: 50,
+    readingRefillEnabled: true,
+    readingRefillMaxPerRun: 20
   },
   pool_refill_schedule: [
     { name: 'pool-refill-morning', cron: '0 5 * * *' },
     { name: 'pool-refill-noon', cron: '0 12 * * *' },
     { name: 'pool-refill-evening', cron: '0 20 * * *' }
-  ]
+  ],
+  reading_passage: {
+    maxPerBucket: 3,
+    refillThresholdRatio: 0.5,
+    perBucketGenerationCap: 3,
+    manualFillMinCount: 1,
+    manualFillMaxCount: 10,
+    manualFillDefaultCount: 2,
+    manualFillConcurrency: 2,
+    // Số title gần nhất trong cùng bucket đưa vào prompt để model không lặp plot.
+    excludeRecentTitleCount: 15
+  },
+  reading_refill_schedule: [{ name: 'reading-refill-daily', cron: '0 6 * * *' }]
 } as const;
 
 export type EnglishConfigKey = keyof typeof EnglishConfigDefaults;
 export type QuestionPoolConfig = z.infer<typeof QuestionPoolSchema>;
 export type QuizDistributionConfig = z.infer<typeof QuizDistributionSchema>;
 export type JobFlagsConfig = z.infer<typeof JobFlagsSchema>;
+export type ReadingPassageConfig = z.infer<typeof ReadingPassageSchema>;
 export type EnglishConfigSnapshot = {
   [K in EnglishConfigKey]: z.infer<(typeof EnglishConfigSchemas)[K]>;
 };
@@ -266,6 +306,32 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
     sortOrder: 620
   },
   {
+    recordKey: 'job_flags.readingRefillEnabled',
+    namespace: 'job_flags',
+    path: 'readingRefillEnabled',
+    category: 'jobs',
+    label: 'Bật Reading-Refill (scheduled)',
+    description: 'Tắt sẽ bỏ qua các lần sinh reading tự động theo lịch (xem reading_refill_schedule.items).',
+    recordType: 'boolean',
+    defaultValue: EnglishConfigDefaults.job_flags.readingRefillEnabled,
+    validation: { type: 'boolean', label: 'Bật Reading-Refill (scheduled)' },
+    uiSchema: { type: 'boolean', label: 'Bật Reading-Refill (scheduled)' },
+    sortOrder: 640
+  },
+  {
+    recordKey: 'job_flags.readingRefillMaxPerRun',
+    namespace: 'job_flags',
+    path: 'readingRefillMaxPerRun',
+    category: 'jobs',
+    label: 'Max bài đọc / 1 lần Reading-Refill',
+    description: 'Giới hạn tổng số reading passage sinh trong mỗi lần Reading-Refill chạy (tối ưu cost AI).',
+    recordType: 'num',
+    defaultValue: EnglishConfigDefaults.job_flags.readingRefillMaxPerRun,
+    validation: intField('Max bài đọc / 1 lần Reading-Refill', 1),
+    uiSchema: intField('Max bài đọc / 1 lần Reading-Refill', 1),
+    sortOrder: 650
+  },
+  {
     recordKey: 'pool_refill_schedule.items',
     namespace: 'pool_refill_schedule',
     path: 'items',
@@ -293,6 +359,51 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
       }
     },
     sortOrder: 630
+  },
+  ...Object.entries(EnglishConfigDefaults.reading_passage).map(([path, defaultValue], index) => {
+    const schema = path === 'refillThresholdRatio' ? percentField(path) : intField(path, 0);
+    return {
+      recordKey: `reading_passage.${path}`,
+      namespace: 'reading_passage' as const,
+      path,
+      category: 'reading',
+      label: path,
+      description: 'English reading passage setting.',
+      recordType: 'num' as const,
+      defaultValue,
+      validation: schema,
+      uiSchema: schema,
+      sortOrder: 700 + index * 10
+    };
+  }),
+  {
+    recordKey: 'reading_refill_schedule.items',
+    namespace: 'reading_refill_schedule',
+    path: 'items',
+    category: 'reading',
+    label: 'Lịch chạy Reading-Refill (cron)',
+    description:
+      'Danh sách các mốc giờ chạy scheduled reading-refill. Đổi giá trị này sẽ reconcile lại BullMQ job ' +
+      'schedulers ngay lập tức (thêm/xoá scheduler), không cần restart.',
+    recordType: 'arr',
+    defaultValue: EnglishConfigDefaults.reading_refill_schedule,
+    validation: {
+      type: 'arr',
+      label: 'Reading Refill Schedule',
+      itemFields: {
+        name: { type: 'str', label: 'Tên scheduler' },
+        cron: { type: 'str', label: 'Cron expression' }
+      }
+    },
+    uiSchema: {
+      type: 'arr',
+      label: 'Reading Refill Schedule',
+      itemFields: {
+        name: { type: 'str', label: 'Tên scheduler' },
+        cron: { type: 'str', label: 'Cron expression' }
+      }
+    },
+    sortOrder: 800
   }
 ];
 
@@ -301,6 +412,8 @@ export function buildDefaultEnglishConfigSnapshot(): EnglishConfigSnapshot {
     question_pool: QuestionPoolSchema.parse(EnglishConfigDefaults.question_pool),
     quiz_distribution: QuizDistributionSchema.parse(EnglishConfigDefaults.quiz_distribution),
     job_flags: JobFlagsSchema.parse(EnglishConfigDefaults.job_flags),
-    pool_refill_schedule: PoolRefillScheduleSchema.parse(EnglishConfigDefaults.pool_refill_schedule)
+    pool_refill_schedule: PoolRefillScheduleSchema.parse(EnglishConfigDefaults.pool_refill_schedule),
+    reading_passage: ReadingPassageSchema.parse(EnglishConfigDefaults.reading_passage),
+    reading_refill_schedule: ReadingRefillScheduleSchema.parse(EnglishConfigDefaults.reading_refill_schedule)
   };
 }

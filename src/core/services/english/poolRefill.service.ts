@@ -1,6 +1,7 @@
 import type { FlowProducer } from 'bullmq';
 import _ from 'lodash';
 import logger from '@/configs/logger.config';
+import { runWithConcurrency } from '@/utils/concurrency';
 import type { ResolvedStudyModel } from '@/configs/aiClient.config';
 import { fillBucketDetailed, getQuestionGenQueue, type QuestionGenJobData } from '@/core/cron/question-gen.job';
 import questionPoolService, { getMaxPoolSize, getPerBucketGenerationCap } from './questionPool.service';
@@ -149,14 +150,15 @@ export async function scanBuckets(options: ScanBucketsOptions): Promise<RefillBu
 
 // ─── Plan (pure, budget-aware) ────────────────────────────────────────────────
 
-export interface RefillPlanItem extends RefillBucketCandidate {
-  count: number;
-}
+export type RefillPlanItem = RefillBucketCandidate & { count: number };
 
-export interface RefillPlanResult {
+// Generic theo candidate: reading passage dùng bucket 2 chiều (cefrLevel × topic) nên
+// không dùng lại được RefillBucketCandidate, nhưng logic budget-cap/per-bucket-cap thì
+// giống hệt — chỉ cần candidate có `deficiency`.
+export interface RefillPlanResult<T extends { deficiency: number } = RefillBucketCandidate> {
   totalBuckets: number;
-  candidates: RefillBucketCandidate[];
-  planned: RefillPlanItem[];
+  candidates: T[];
+  planned: Array<T & { count: number }>;
   cappedByBudget: boolean;
 }
 
@@ -169,8 +171,11 @@ export interface BuildRefillPlanOptions {
   forceCount?: number;
 }
 
-export function buildRefillPlan(candidates: RefillBucketCandidate[], opts: BuildRefillPlanOptions): RefillPlanResult {
-  const planned: RefillPlanItem[] = [];
+export function buildRefillPlan<T extends { deficiency: number }>(
+  candidates: T[],
+  opts: BuildRefillPlanOptions
+): RefillPlanResult<T> {
+  const planned: Array<T & { count: number }> = [];
   let plannedQuestions = 0;
   let cappedByBudget = false;
 
@@ -234,27 +239,6 @@ async function executeScheduledPlanAsFlow(
 // ─── Execute: in-process (manual/admin) ────────────────────────────────────────
 
 const activeManualRuns = new Set<string>();
-
-async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<PromiseSettledResult<T>[]> {
-  const results: PromiseSettledResult<T>[] = [];
-  let index = 0;
-
-  async function runNext(): Promise<void> {
-    const taskIndex = index++;
-    if (taskIndex >= tasks.length) return;
-    const task = tasks[taskIndex]!;
-    try {
-      const value = await task();
-      results[taskIndex] = { status: 'fulfilled', value };
-    } catch (reason) {
-      results[taskIndex] = { status: 'rejected', reason };
-    }
-    await runNext();
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, runNext));
-  return results;
-}
 
 async function executeManualPlanInProcess(
   plan: RefillPlanResult,

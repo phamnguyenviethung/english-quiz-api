@@ -14,6 +14,12 @@ import { buildDescriptionPrompt, type DescriptionQuestion } from './prompt/descr
 import { buildFillBlankPrompt, type FillBlankQuestion } from './prompt/fill-blank-prompt';
 import { buildOddOneOutPrompt, type OddOneOutQuestion } from './prompt/odd-one-out-prompt';
 import { buildReadingPrompt, type ReadingQuestion, VALID_TACTICS } from './prompt/reading-prompt';
+import {
+  buildReadingPassagePrompt,
+  countPassageWords,
+  CEFR_WORD_BANDS,
+  type ReadingPassage
+} from './prompt/reading-passage-prompt';
 import { buildParagraphPrompt, type ParagraphQuestion } from './prompt/paragraph-prompt';
 import { buildPhrasePrompt, type PhraseQuestion } from './prompt/phrase-prompt';
 import { buildSlangPrompt, type SlangQuestion } from './prompt/slang-prompt';
@@ -21,8 +27,9 @@ import { buildSynonymPrompt, type SynonymQuestion } from './prompt/synonym-promp
 import { buildVocabPrompt, type DifficultyContext, type VocabQuestion } from './prompt/vocab-prompt';
 import { buildIdiomPrompt, type IdiomQuestion } from './prompt/idiom-prompt';
 import { buildVerbUseMatchPrompt, type VerbUseMatchQuestion } from './prompt/verb-use-match-prompt';
-import { type EngLevel, type QuizType } from './questionTypes';
+import { ENG_LEVELS, type EngLevel, type QuizType } from './questionTypes';
 import { BusinessLogicException } from '@/core/exceptions';
+import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
 export type {
   ConversationQuestion,
@@ -33,6 +40,7 @@ export type {
   OddOneOutQuestion,
   ParagraphQuestion,
   PhraseQuestion,
+  ReadingPassage,
   ReadingQuestion,
   SlangQuestion,
   SynonymQuestion,
@@ -138,6 +146,14 @@ export const ReadingQuestionSchema = z.object({
   explanation: z.string()
 });
 
+export const ReadingPassageSchema = z.object({
+  title: z.string(),
+  paragraphs: z.array(z.string()).min(2),
+  wordCount: z.number().int().positive(),
+  topic: z.string(),
+  cefrLevel: z.enum(ENG_LEVELS)
+});
+
 // Response shape metadata dùng cho OpenAPI (src/api/common/responseSchemas.ts) — usage
 // field trả về từ generateStructuredOutput, optional khi provider không trả token count.
 export const UsageSchema = z.object({
@@ -157,6 +173,7 @@ const SynonymBatchSchema = z.object({ questions: z.array(SynonymQuestionSchema).
 const SlangBatchSchema = z.object({ questions: z.array(SlangQuestionSchema).min(1).max(5) });
 const OddOneOutBatchSchema = z.object({ questions: z.array(OddOneOutQuestionSchema).min(1).max(5) });
 const ReadingBatchSchema = z.object({ questions: z.array(ReadingQuestionSchema).min(1).max(5) });
+const ReadingPassageBatchSchema = z.object({ passages: z.array(ReadingPassageSchema).min(1).max(5) });
 
 export const ParagraphQuestionSchema = z.object({
   paragraph: z.string(),
@@ -196,6 +213,22 @@ export interface BatchGenerateOptions {
   count: number;
   topic?: string;
   excludeWords?: string[];
+}
+
+/**
+ * Context sinh reading passage. Không dùng DifficultyContext vì optionCount/show5050
+ * vô nghĩa với bài đọc thuần — passage không có đáp án.
+ */
+export interface ReadingPassageContext {
+  cefrLevel: EngLevel;
+  topicName: string;
+  model: string;
+  provider?: ProviderPreferencesJson;
+}
+
+export interface ReadingPassageBatchOptions {
+  count: number;
+  excludeTitles?: string[];
 }
 
 interface BatchResult<T> {
@@ -387,6 +420,35 @@ function isValidDescriptionQuestion(
   const wrongs = q.wrongAnswers.map((w) => w.toLowerCase().trim());
   if (wrongs.includes(correct) || new Set(wrongs).size !== wrongs.length) return false;
   return true;
+}
+
+// Model hay lệch word count và đôi khi tự đổi cefrLevel/topic — chuẩn hoá về đúng
+// input rồi mới lọc, thay vì loại thẳng bài chỉ vì model điền sai metadata.
+// Tolerance ±15%: band trong guideline là mục tiêu biên tập, không phải hard limit;
+// loại quá gắt thì tỉ lệ hỏng batch cao mà chất lượng không hơn.
+const WORD_COUNT_TOLERANCE = 0.15;
+
+function normalizeReadingPassage(raw: ReadingPassage, ctx: ReadingPassageContext): ReadingPassage {
+  const paragraphs = raw.paragraphs.map((paragraph) => paragraph.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return {
+    title: raw.title.trim(),
+    paragraphs,
+    wordCount: countPassageWords(paragraphs),
+    topic: ctx.topicName,
+    cefrLevel: ctx.cefrLevel
+  };
+}
+
+function isValidReadingPassage(passage: ReadingPassage, excludeTitles: string[]): boolean {
+  if (!passage.title || passage.paragraphs.length < 2) return false;
+
+  const band = CEFR_WORD_BANDS[passage.cefrLevel];
+  const min = Math.floor(band.min * (1 - WORD_COUNT_TOLERANCE));
+  const max = Math.ceil(band.max * (1 + WORD_COUNT_TOLERANCE));
+  if (passage.wordCount < min || passage.wordCount > max) return false;
+
+  const normalizedTitle = passage.title.toLowerCase();
+  return !excludeTitles.some((title) => title.trim().toLowerCase() === normalizedTitle);
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -1113,6 +1175,43 @@ class StudyService {
     return { questions: valid as VerbUseMatchQuestion[], usage };
   }
 
+  // ─── Reading passage (nội dung thuần, không kèm câu hỏi) ───────────────────
+
+  async generateReadingPassageBatch(
+    ctx: ReadingPassageContext,
+    opts: ReadingPassageBatchOptions
+  ): Promise<{ passages: ReadingPassage[]; usage?: StructuredOutputUsage }> {
+    const { count, excludeTitles = [] } = opts;
+    logger.info(
+      `[StudyService] Batch generating ${count} reading passage(s) (cefrLevel=${ctx.cefrLevel} topic=${ctx.topicName})`
+    );
+
+    const systemInstruction = buildReadingPassagePrompt({
+      topicName: ctx.topicName,
+      cefrLevel: ctx.cefrLevel,
+      count,
+      excludeTitles
+    });
+
+    const { data, usage } = await generateStructuredOutput(ReadingPassageBatchSchema, {
+      model: ctx.model,
+      provider: ctx.provider,
+      instructions: systemInstruction,
+      input: `Write exactly ${count} reading passage(s) about "${ctx.topicName}" at ${ctx.cefrLevel} level.`,
+      maxOutputTokens: 1200 * count,
+      // Cao hơn các quizType khác: guideline đặt "variety" thành yêu cầu cứng, lặp plot
+      // giữa các lần sinh là lỗi chất lượng chứ không phải chuyện nhỏ.
+      temperature: 0.95
+    });
+
+    const valid = data.passages
+      .map((passage) => normalizeReadingPassage(passage, ctx))
+      .filter((passage) => isValidReadingPassage(passage, excludeTitles));
+
+    logger.info(`[StudyService] Reading passage batch: ${valid.length}/${count} valid`);
+    return { passages: valid, usage };
+  }
+
   // ─── Dispatch & Context ────────────────────────────────────────────────────
 
   /**
@@ -1135,6 +1234,21 @@ class StudyService {
       model: resolved.model,
       provider: resolved.provider,
       topicName: input.topicName ?? null
+    };
+  }
+
+  /** Như buildContext nhưng cho reading passage — luôn resolve model theo context 'reading'. */
+  async buildReadingPassageContext(input: {
+    cefrLevel: EngLevel;
+    topicName: string;
+    model?: string;
+  }): Promise<ReadingPassageContext> {
+    const resolved = await resolveStudyModel('reading', input.model);
+    return {
+      cefrLevel: input.cefrLevel,
+      topicName: input.topicName,
+      model: resolved.model,
+      provider: resolved.provider
     };
   }
 

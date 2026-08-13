@@ -11,6 +11,7 @@ import { englishRoute } from './routes/english.route';
 import { adminRoute } from './routes/admin.route';
 import { questionGenQueue } from '@/core/cron/question-gen.job';
 import { poolRefillQueue } from '@/core/cron/pool-refill.job';
+import { readingRefillQueue } from '@/core/cron/reading-gen.job';
 import { z } from 'zod';
 import { t } from 'elysia';
 import { ApiOk, ApiErrorSchema } from './common/responseSchemas';
@@ -24,7 +25,11 @@ export async function startApi(): Promise<void> {
   const serverAdapter = new ElysiaAdapter('/queues');
 
   createBullBoard({
-    queues: [new BullMQAdapter(questionGenQueue), new BullMQAdapter(poolRefillQueue)],
+    queues: [
+      new BullMQAdapter(questionGenQueue),
+      new BullMQAdapter(poolRefillQueue),
+      new BullMQAdapter(readingRefillQueue)
+    ],
     serverAdapter
   });
 

@@ -7,10 +7,15 @@ import aiModelService from '@/core/services/ai/aiModel.service';
 import openrouterCatalogService from '@/core/services/ai/openrouterCatalog.service';
 import { resolveStudyModels } from '@/configs/aiClient.config';
 import { bucketKeyOf, type BucketFilter } from '@/core/services/english/poolRefill.service';
-import { ENG_LEVELS, QUIZ_TYPES, type QuizType } from '@/core/services/english/questionTypes';
+import readingRefillService, {
+  readingBucketKeyOf,
+  type ReadingBucketFilter
+} from '@/core/services/english/readingRefill.service';
+import readingPassageService, { type ReadingPassagesSort } from '@/core/services/english/readingPassage.service';
+import { ENG_LEVELS, QUIZ_TYPES, type EngLevel, type QuizType } from '@/core/services/english/questionTypes';
 import questionPoolService from '@/core/services/english/questionPool.service';
 import { BusinessLogicException } from '@/core/exceptions';
-import type { DifficultyContext } from '@/core/services/english/study.service';
+import studyService, { type DifficultyContext } from '@/core/services/english/study.service';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
 // ─── Tenants ────────────────────────────────────────────────────────────────────
@@ -52,11 +57,11 @@ function updateTenant(id: number, input: UpdateTenantInput) {
 // ─── AI Models ───────────────────────────────────────────────────────────────────
 
 function listModels() {
-  return aiModelService.getAllModels();
+  return aiModelService.getAllModelsWithReadingProvider();
 }
 
 async function getModel(id: number) {
-  const found = await aiModelService.getModelById(id);
+  const found = await aiModelService.getModelByIdWithReadingProvider(id);
   if (!found) throw new NotFoundException(`Không tìm thấy model: ${id}`);
   return found;
 }
@@ -67,13 +72,22 @@ interface CreateModelInput {
   isActive?: boolean;
   scheduleEnabled?: boolean;
   manualEnabled?: boolean;
+  readingEnabled?: boolean;
   scheduleProvider?: ProviderPreferencesJson | null;
   manualProvider?: ProviderPreferencesJson | null;
+  readingProvider?: ProviderPreferencesJson | null;
 }
 
-function createModel(input: CreateModelInput) {
+// readingProvider lưu ở 2 bảng riêng nên phải ghi sau khi có model id — API bên ngoài
+// vẫn chỉ thấy 1 object lồng trong body như 2 provider kia.
+async function createModel(input: CreateModelInput) {
   logger.info(`[Admin] Create AI model key="${input.key}" modelId="${input.modelId}"`);
-  return aiModelService.createModel({ ...input, isActive: input.isActive ?? true });
+  const { readingProvider, ...modelInput } = input;
+  const created = await aiModelService.createModel({ ...modelInput, isActive: input.isActive ?? true });
+  if (readingProvider !== undefined) {
+    await aiModelService.setReadingProvider(created.id, readingProvider);
+  }
+  return (await aiModelService.getModelByIdWithReadingProvider(created.id)) ?? created;
 }
 
 interface UpdateModelInput {
@@ -82,12 +96,19 @@ interface UpdateModelInput {
   isActive?: boolean;
   scheduleEnabled?: boolean;
   manualEnabled?: boolean;
+  readingEnabled?: boolean;
   scheduleProvider?: ProviderPreferencesJson | null;
   manualProvider?: ProviderPreferencesJson | null;
+  readingProvider?: ProviderPreferencesJson | null;
 }
 
-function updateModel(id: number, input: UpdateModelInput) {
-  return aiModelService.updateModel(id, input);
+async function updateModel(id: number, input: UpdateModelInput) {
+  const { readingProvider, ...modelInput } = input;
+  const updated = await aiModelService.updateModel(id, modelInput);
+  if (readingProvider !== undefined) {
+    await aiModelService.setReadingProvider(id, readingProvider);
+  }
+  return (await aiModelService.getModelByIdWithReadingProvider(id)) ?? updated;
 }
 
 function listModelCatalog(search?: string) {
@@ -274,6 +295,177 @@ async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
   });
 }
 
+// ─── Reading passages ───────────────────────────────────────────────────────────
+
+interface ListReadingsQuery {
+  cefrLevel?: string;
+  topicId?: number;
+  withoutTopic?: boolean;
+  model?: string;
+  isActive?: boolean;
+  createdFrom?: string;
+  createdTo?: string;
+  q?: string;
+  sort?: ReadingPassagesSort;
+  page?: number;
+  pageSize?: number;
+}
+
+function listReadings(query: ListReadingsQuery) {
+  return readingPassageService.listPassages(query);
+}
+
+async function getReading(id: number) {
+  const found = await readingPassageService.getById(id);
+  if (!found) throw new NotFoundException(`Không tìm thấy reading passage: ${id}`);
+  return found;
+}
+
+interface UpdateReadingInput {
+  title?: string;
+  paragraphs?: string[];
+  isActive?: boolean;
+}
+
+function updateReading(id: number, input: UpdateReadingInput) {
+  if (input.paragraphs !== undefined && input.paragraphs.filter((p) => p.trim().length > 0).length < 2) {
+    throw new BusinessLogicException('Reading passage phải có ít nhất 2 đoạn văn');
+  }
+  logger.info(`[Admin] Update reading passage id=${id}`);
+  return readingPassageService.updatePassage(id, input);
+}
+
+async function deleteReading(id: number) {
+  logger.info(`[Admin] Delete reading passage id=${id}`);
+  await readingPassageService.deletePassage(id);
+  return { id, deleted: true };
+}
+
+function listReadingModels() {
+  return readingPassageService.listPassageModels();
+}
+
+interface GenerateReadingPassageInput {
+  topicName: string;
+  cefrLevel: EngLevel;
+  model?: string;
+}
+
+/** Sinh thử 1 bài để admin xem prompt/model cho ra gì — KHÔNG lưu vào kho. */
+async function generateReadingPassage(input: GenerateReadingPassageInput) {
+  const topicName = input.topicName.trim();
+  if (!topicName) throw new BusinessLogicException('topicName không được để trống');
+
+  const ctx = await studyService.buildReadingPassageContext({
+    cefrLevel: input.cefrLevel,
+    topicName,
+    model: input.model
+  });
+  logger.info(`[Admin] Generate reading passage preview cefrLevel=${ctx.cefrLevel} topic="${topicName}"`);
+
+  const { passages, usage } = await studyService.generateReadingPassageBatch(ctx, { count: 1 });
+  const passage = passages[0];
+  if (!passage) {
+    throw new BusinessLogicException(
+      'Model không trả về bài đọc hợp lệ (sai độ dài hoặc thiếu đoạn). Thử lại hoặc đổi model.'
+    );
+  }
+  return { passage, usage };
+}
+
+interface ReadingBucketFilterInput {
+  cefrLevels?: string[];
+  topicIds?: number[];
+}
+
+function toReadingBucketFilter(input: ReadingBucketFilterInput | undefined): ReadingBucketFilter | undefined {
+  if (!input) return undefined;
+
+  const invalidLevels = input.cefrLevels?.filter((level) => !ENG_LEVELS.includes(level as never)) ?? [];
+  if (invalidLevels.length > 0) throw new BusinessLogicException(`cefrLevel không hợp lệ: ${invalidLevels.join(', ')}`);
+
+  const invalidTopicIds = input.topicIds?.filter((id) => !Number.isInteger(id)) ?? [];
+  if (invalidTopicIds.length > 0)
+    throw new BusinessLogicException(`topicId không hợp lệ: ${invalidTopicIds.join(', ')}`);
+
+  const filter: ReadingBucketFilter = {
+    cefrLevels: input.cefrLevels as EngLevel[] | undefined,
+    topicIds: input.topicIds
+  };
+
+  const hasAny = Object.values(filter).some((values) => values !== undefined && values.length > 0);
+  return hasAny ? filter : undefined;
+}
+
+interface ListReadingBucketsQuery {
+  cefrLevels?: string;
+  topicIds?: string;
+  scope?: 'all' | 'deficient';
+  countPerBucket?: number;
+}
+
+/** Preview: bucket nào sẽ được sinh với đúng bộ tham số này, và mỗi bucket bao nhiêu bài. */
+async function listReadingBuckets(query: ListReadingBucketsQuery) {
+  const topicIds = parseCsvParam(query.topicIds)?.map((id) => Number(id));
+  const filter = toReadingBucketFilter({
+    cefrLevels: parseCsvParam(query.cefrLevels),
+    topicIds
+  });
+
+  const { matched, plan } = await readingRefillService.buildManualReadingRefillPlan({
+    scope: query.scope,
+    countPerBucket: query.countPerBucket,
+    filter
+  });
+
+  const plannedByKey = new Map(plan.planned.map((item) => [readingBucketKeyOf(item), item.count]));
+
+  return {
+    buckets: matched.map((candidate) => ({
+      bucketKey: readingBucketKeyOf(candidate),
+      cefrLevel: candidate.cefrLevel,
+      topicId: candidate.topicId,
+      topicName: candidate.topicName,
+      currentCount: candidate.currentCount,
+      deficiency: candidate.deficiency,
+      plannedCount: plannedByKey.get(readingBucketKeyOf(candidate)) ?? 0
+    })),
+    summary: {
+      matchedBuckets: matched.length,
+      plannedBuckets: plan.planned.length,
+      plannedPassages: plan.planned.reduce((sum, item) => sum + item.count, 0),
+      maxPerBucket: readingPassageService.getMaxPerBucket()
+    }
+  };
+}
+
+interface TriggerReadingRefillInput {
+  models?: string[];
+  countPerBucket?: number;
+  scope?: 'all' | 'deficient';
+  filter?: ReadingBucketFilterInput;
+  bucketKeys?: string[];
+}
+
+async function triggerReadingRefill(input: TriggerReadingRefillInput) {
+  const models = await resolveStudyModels('reading', input.models);
+  const filter = toReadingBucketFilter(input.filter);
+
+  logger.info(
+    `[Admin] Manual reading refill scope=${input.scope ?? 'all'} models=${models.map((m) => m.model).join(',')} ` +
+      `countPerBucket=${input.countPerBucket ?? '-'} filter=${filter ? JSON.stringify(filter) : '-'} ` +
+      `selectedBuckets=${input.bucketKeys?.length ?? '-'}`
+  );
+
+  return readingRefillService.runManualReadingRefill({
+    models,
+    countPerBucket: input.countPerBucket,
+    scope: input.scope,
+    filter,
+    bucketKeys: input.bucketKeys
+  });
+}
+
 export default {
   listTenants,
   getTenant,
@@ -294,5 +486,13 @@ export default {
   setTopicAccess,
   setQuizTypeAccess,
   listPoolBuckets,
-  triggerManualPoolRefill
+  triggerManualPoolRefill,
+  listReadings,
+  getReading,
+  updateReading,
+  deleteReading,
+  listReadingModels,
+  generateReadingPassage,
+  listReadingBuckets,
+  triggerReadingRefill
 };

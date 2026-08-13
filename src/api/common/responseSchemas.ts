@@ -6,7 +6,9 @@ import {
   QuestionPoolSchema,
   QuizDistributionSchema,
   JobFlagsSchema,
-  PoolRefillScheduleSchema
+  PoolRefillScheduleSchema,
+  ReadingPassageSchema as ReadingPassageConfigSchema,
+  ReadingRefillScheduleSchema
 } from '@/core/services/english/englishConfig.defaults';
 import {
   VocabQuestionSchema,
@@ -76,8 +78,11 @@ export const AiModelSchema = t.Object({
   isActive: t.Boolean(),
   scheduleEnabled: t.Boolean(),
   manualEnabled: t.Boolean(),
+  readingEnabled: t.Boolean(),
   scheduleProvider: t.Nullable(ProviderPreferencesSchema),
   manualProvider: t.Nullable(ProviderPreferencesSchema),
+  // Lưu normalize ở ai_model_provider_prefs, assemble lại đúng shape này khi trả về.
+  readingProvider: t.Optional(t.Nullable(ProviderPreferencesSchema)),
   pricePromptPerToken: t.Nullable(t.Number()),
   priceCompletionPerToken: t.Nullable(t.Number()),
   pricingRaw: t.Nullable(t.Record(t.String(), t.Unknown())),
@@ -221,13 +226,78 @@ export const PoolModelStatSchema = t.Object({
   count: t.Number({ description: 'Số câu trong pool được sinh bởi model này.' })
 });
 
+// ── Reading passages ─────────────────────────────────────────────────────────
+// Bài đọc thuần (chưa có câu hỏi) — khác quizType 'reading' trong question pool.
+export const ReadingPassageSchema = t.Object({
+  id: t.Number(),
+  title: t.String(),
+  paragraphs: t.Array(t.String(), { description: 'Các đoạn văn theo đúng thứ tự đọc.' }),
+  wordCount: t.Number({ description: 'Đếm server-side từ paragraphs, không lấy số model trả về.' }),
+  cefrLevel: t.String(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  model: t.String(),
+  tokenIn: t.Number(),
+  tokenOut: t.Number(),
+  isActive: t.Boolean(),
+  createdAt: t.Nullable(DateTimeSchema),
+  updatedAt: t.Nullable(DateTimeSchema)
+});
+
+export const ReadingPassagePageSchema = t.Object({
+  items: t.Array(ReadingPassageSchema),
+  page: t.Number({ description: 'Trang hiện tại, 1-based.' }),
+  pageSize: t.Number(),
+  total: t.Number({ description: 'Tổng số bài khớp filter, không phụ thuộc trang.' }),
+  totalPages: t.Number()
+});
+
+export const ReadingPassageModelStatSchema = t.Object({
+  model: t.String(),
+  count: t.Number({ description: 'Số bài đọc trong kho được sinh bởi model này.' })
+});
+
+// Bài sinh thử qua POST /admin/readings/generate — chưa lưu nên không có id.
+export const GeneratedReadingPassageSchema = t.Object({
+  passage: t.Object({
+    title: t.String(),
+    paragraphs: t.Array(t.String()),
+    wordCount: t.Number(),
+    topic: t.String(),
+    cefrLevel: t.String()
+  }),
+  usage: t.Optional(t.Object({ inputTokens: t.Number(), outputTokens: t.Number(), model: t.String() }))
+});
+
+export const ReadingBucketSchema = t.Object({
+  bucketKey: t.String({ description: '`{cefrLevel}:{topicId|null}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  cefrLevel: t.String(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  currentCount: t.Number({ description: 'Số bài đang active trong bucket.' }),
+  deficiency: t.Number({ description: 'reading_passage.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
+  plannedCount: t.Number({ description: 'Số bài sẽ sinh cho bucket này. 0 = bị scope bỏ qua.' })
+});
+
+export const ReadingBucketPreviewSchema = t.Object({
+  buckets: t.Array(ReadingBucketSchema),
+  summary: t.Object({
+    matchedBuckets: t.Number({ description: 'Số bucket khớp filter (kể cả bucket sẽ bị bỏ qua).' }),
+    plannedBuckets: t.Number(),
+    plannedPassages: t.Number(),
+    maxPerBucket: t.Number()
+  })
+});
+
 // ── English config ───────────────────────────────────────────────────────────
 // Zod schema có sẵn (englishConfig.defaults.ts) — dùng trực tiếp thay vì viết lại TypeBox.
 export const EnglishConfigSnapshotSchema = z.object({
   question_pool: QuestionPoolSchema,
   quiz_distribution: QuizDistributionSchema,
   job_flags: JobFlagsSchema,
-  pool_refill_schedule: PoolRefillScheduleSchema
+  pool_refill_schedule: PoolRefillScheduleSchema,
+  reading_passage: ReadingPassageConfigSchema,
+  reading_refill_schedule: ReadingRefillScheduleSchema
 });
 
 export const EnglishConfigSnapshotResponseSchema = z.object({

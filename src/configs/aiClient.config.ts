@@ -4,7 +4,7 @@ import _ from 'lodash';
 import logger from '@/configs/logger.config';
 import aiModelService from '@/core/services/ai/aiModel.service';
 import { BusinessLogicException } from '@/core/exceptions';
-import type { ProviderPreferencesJson } from '@/core/db/schema/main';
+import type { AiModel, ProviderPreferencesJson } from '@/core/db/schema/main';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set');
@@ -31,20 +31,44 @@ export const MODELS = {
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];
 
 /**
- * Context sinh câu hỏi. Mỗi model bật/tắt độc lập cho từng context và có provider
+ * Context sinh nội dung. Mỗi model bật/tắt độc lập cho từng context và có provider
  * routing riêng — schedule dùng cho mọi đường tự động (cron refill + on-demand
- * backstop), manual chỉ cho admin trigger.
+ * backstop), manual chỉ cho admin trigger, reading cho pipeline reading passage
+ * (cả cron lẫn manual, vì reading vốn đã là pool model tách biệt).
  */
-export type ModelContext = 'schedule' | 'manual';
+export type ModelContext = 'schedule' | 'manual' | 'reading';
+
+const ENABLED_FIELD: Record<ModelContext, 'scheduleEnabled' | 'manualEnabled' | 'readingEnabled'> = {
+  schedule: 'scheduleEnabled',
+  manual: 'manualEnabled',
+  reading: 'readingEnabled'
+};
 
 export interface ResolvedStudyModel {
   model: string;
   provider?: ProviderPreferencesJson;
 }
 
+/**
+ * Provider routing của từng model theo context. schedule/manual đọc thẳng cột jsonb;
+ * reading lưu normalize ở 2 bảng nên đi qua aiModelService — batch theo id để tránh
+ * N+1 khi resolve cả pool model.
+ */
+async function resolveProvidersFor(
+  context: ModelContext,
+  models: AiModel[]
+): Promise<Map<number, ProviderPreferencesJson | undefined>> {
+  if (context === 'reading') {
+    return aiModelService.getReadingProvidersByModelRefIds(models.map((m) => m.id));
+  }
+  return new Map(
+    models.map((m) => [m.id, (context === 'schedule' ? m.scheduleProvider : m.manualProvider) ?? undefined])
+  );
+}
+
 export async function getStudyModelsForContext(context: ModelContext): Promise<ResolvedStudyModel[]> {
   const activeModels = await aiModelService.getActiveModels();
-  const enabled = activeModels.filter((m) => (context === 'schedule' ? m.scheduleEnabled : m.manualEnabled));
+  const enabled = activeModels.filter((m) => m[ENABLED_FIELD[context]]);
 
   if (enabled.length === 0) {
     logger.warn(`[aiClient] No active models enabled for context=${context}, falling back to hardcoded MODELS`);
@@ -52,10 +76,8 @@ export async function getStudyModelsForContext(context: ModelContext): Promise<R
   }
 
   logger.info(`[aiClient] Active models (context=${context}): ${enabled.map((m) => m.modelId).join(', ')}`);
-  return enabled.map((m) => ({
-    model: m.modelId,
-    provider: (context === 'schedule' ? m.scheduleProvider : m.manualProvider) ?? undefined
-  }));
+  const providers = await resolveProvidersFor(context, enabled);
+  return enabled.map((m) => ({ model: m.modelId, provider: providers.get(m.id) }));
 }
 
 export async function pickStudyModelForContext(context: ModelContext): Promise<ResolvedStudyModel> {
@@ -71,10 +93,9 @@ export async function pickStudyModelForContext(context: ModelContext): Promise<R
 export async function resolveStudyModel(context: ModelContext, explicitModelId?: string): Promise<ResolvedStudyModel> {
   if (!explicitModelId) return pickStudyModelForContext(context);
   const row = await aiModelService.getModelByModelId(explicitModelId);
-  return {
-    model: explicitModelId,
-    provider: (context === 'schedule' ? row?.scheduleProvider : row?.manualProvider) ?? undefined
-  };
+  if (!row) return { model: explicitModelId };
+  const providers = await resolveProvidersFor(context, [row]);
+  return { model: explicitModelId, provider: providers.get(row.id) };
 }
 
 /**
@@ -92,7 +113,7 @@ export async function resolveStudyModels(context: ModelContext, modelIds?: strin
 
   const unknown: string[] = [];
   const disabled: string[] = [];
-  const resolved: ResolvedStudyModel[] = [];
+  const usable: AiModel[] = [];
 
   for (const [index, row] of rows.entries()) {
     const modelId = requested[index]!;
@@ -100,14 +121,11 @@ export async function resolveStudyModels(context: ModelContext, modelIds?: strin
       unknown.push(modelId);
       continue;
     }
-    if (!row.isActive || !(context === 'schedule' ? row.scheduleEnabled : row.manualEnabled)) {
+    if (!row.isActive || !row[ENABLED_FIELD[context]]) {
       disabled.push(modelId);
       continue;
     }
-    resolved.push({
-      model: row.modelId,
-      provider: (context === 'schedule' ? row.scheduleProvider : row.manualProvider) ?? undefined
-    });
+    usable.push(row);
   }
 
   if (unknown.length > 0 || disabled.length > 0) {
@@ -118,7 +136,8 @@ export async function resolveStudyModels(context: ModelContext, modelIds?: strin
     throw new BusinessLogicException(`Model không dùng được (${parts.join('; ')})`);
   }
 
-  return resolved;
+  const providers = await resolveProvidersFor(context, usable);
+  return usable.map((row) => ({ model: row.modelId, provider: providers.get(row.id) }));
 }
 
 interface StructuredOutputRequest {

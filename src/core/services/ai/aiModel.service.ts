@@ -1,8 +1,17 @@
-import { and, asc, eq, ne, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, or } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
-import { aiModel, type AiModel, type InsertAiModel, type ProviderPreferencesJson } from '@/core/db/schema/main';
+import {
+  aiModel,
+  aiModelProviderPref,
+  aiModelProviderPrefValue,
+  type AiModel,
+  type AiModelProviderPrefValue,
+  type InsertAiModel,
+  type ProviderPreferencesJson
+} from '@/core/db/schema/main';
 import { ConflictException, NotFoundException } from '@/core/exceptions';
+import { fromProviderPreferences, isEmptyProviderPreferences, toProviderPreferences } from './providerPref.mapper';
 import openrouterCatalogService from './openrouterCatalog.service';
 
 export type AiModelConflictField = 'key' | 'modelId';
@@ -19,9 +28,13 @@ interface CreateModelInput {
   isActive: boolean;
   scheduleEnabled?: boolean;
   manualEnabled?: boolean;
+  readingEnabled?: boolean;
   scheduleProvider?: ProviderPreferencesJson | null;
   manualProvider?: ProviderPreferencesJson | null;
 }
+
+// Context duy nhất hiện dùng bảng normalize. Xem comment ở schema/main.ts.
+const READING_PREF_CONTEXT = 'reading';
 
 // Các cột giá được nạp từ catalog OpenRouter, không do admin nhập tay.
 type PricingSnapshot = Pick<
@@ -165,6 +178,7 @@ async function createModel(input: CreateModelInput): Promise<AiModel> {
           isActive,
           scheduleEnabled: input.scheduleEnabled ?? true,
           manualEnabled: input.manualEnabled ?? true,
+          readingEnabled: input.readingEnabled ?? true,
           scheduleProvider: input.scheduleProvider ?? null,
           manualProvider: input.manualProvider ?? null,
           ...pricing
@@ -186,7 +200,14 @@ async function createModel(input: CreateModelInput): Promise<AiModel> {
 type UpdateModelInput = Partial<
   Pick<
     InsertAiModel,
-    'key' | 'modelId' | 'isActive' | 'scheduleEnabled' | 'manualEnabled' | 'scheduleProvider' | 'manualProvider'
+    | 'key'
+    | 'modelId'
+    | 'isActive'
+    | 'scheduleEnabled'
+    | 'manualEnabled'
+    | 'readingEnabled'
+    | 'scheduleProvider'
+    | 'manualProvider'
   >
 >;
 
@@ -258,6 +279,117 @@ async function syncAllModelsPricing(): Promise<{ synced: number; notFound: strin
   return { synced, notFound };
 }
 
+// ─── Reading provider preferences (2 bảng normalize) ─────────────────────────────
+
+/**
+ * Provider routing context 'reading' của nhiều model trong 2 query, không phải N+1.
+ * Model chưa cấu hình gì thì không có key trong Map (caller đọc ra undefined).
+ */
+async function getReadingProvidersByModelRefIds(
+  modelRefIds: number[]
+): Promise<Map<number, ProviderPreferencesJson | undefined>> {
+  const result = new Map<number, ProviderPreferencesJson | undefined>();
+  if (modelRefIds.length === 0) return result;
+
+  const prefs = await db
+    .select()
+    .from(aiModelProviderPref)
+    .where(
+      and(inArray(aiModelProviderPref.modelRefId, modelRefIds), eq(aiModelProviderPref.context, READING_PREF_CONTEXT))
+    );
+  if (prefs.length === 0) return result;
+
+  const valueRows = await db
+    .select()
+    .from(aiModelProviderPrefValue)
+    .where(
+      inArray(
+        aiModelProviderPrefValue.prefRefId,
+        prefs.map((pref) => pref.id)
+      )
+    );
+
+  const valuesByPrefId = new Map<number, AiModelProviderPrefValue[]>();
+  for (const row of valueRows) {
+    const bucket = valuesByPrefId.get(row.prefRefId) ?? [];
+    bucket.push(row);
+    valuesByPrefId.set(row.prefRefId, bucket);
+  }
+
+  for (const pref of prefs) {
+    result.set(pref.modelRefId, toProviderPreferences(pref, valuesByPrefId.get(pref.id) ?? []));
+  }
+  return result;
+}
+
+async function getReadingProvider(modelRefId: number): Promise<ProviderPreferencesJson | undefined> {
+  const map = await getReadingProvidersByModelRefIds([modelRefId]);
+  return map.get(modelRefId);
+}
+
+/**
+ * Ghi đè toàn bộ provider routing 'reading' của 1 model (replace, không merge —
+ * cùng cách hành xử với setTopicAccess). `input = null` hoặc object rỗng → xoá sạch
+ * row, model quay về "không có provider preference".
+ */
+async function setReadingProvider(modelRefId: number, input: ProviderPreferencesJson | null): Promise<void> {
+  const parsed = input === null ? null : fromProviderPreferences(input);
+  const shouldClear = parsed === null || isEmptyProviderPreferences(parsed.columns, parsed.values);
+
+  await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: aiModelProviderPref.id })
+      .from(aiModelProviderPref)
+      .where(and(eq(aiModelProviderPref.modelRefId, modelRefId), eq(aiModelProviderPref.context, READING_PREF_CONTEXT)))
+      .limit(1);
+
+    if (shouldClear) {
+      if (!existing) return;
+      await tx.delete(aiModelProviderPrefValue).where(eq(aiModelProviderPrefValue.prefRefId, existing.id));
+      await tx.delete(aiModelProviderPref).where(eq(aiModelProviderPref.id, existing.id));
+      return;
+    }
+
+    const [pref] = await tx
+      .insert(aiModelProviderPref)
+      .values({ modelRefId, context: READING_PREF_CONTEXT, ...parsed.columns })
+      .onConflictDoUpdate({
+        target: [aiModelProviderPref.modelRefId, aiModelProviderPref.context],
+        set: { ...parsed.columns, updatedAt: new Date() }
+      })
+      .returning({ id: aiModelProviderPref.id });
+    if (!pref) throw new Error(`[AiModelService] Failed to upsert provider pref for model ${modelRefId}`);
+
+    await tx.delete(aiModelProviderPrefValue).where(eq(aiModelProviderPrefValue.prefRefId, pref.id));
+    if (parsed.values.length > 0) {
+      await tx
+        .insert(aiModelProviderPrefValue)
+        .values(parsed.values.map((value) => ({ prefRefId: pref.id, ...value })));
+    }
+  });
+
+  logger.info(`[AiModelService] Set reading provider modelRefId=${modelRefId} cleared=${shouldClear}`);
+}
+
+export type AiModelWithReadingProvider = AiModel & { readingProvider: ProviderPreferencesJson | null };
+
+async function attachReadingProvider(models: AiModel[]): Promise<AiModelWithReadingProvider[]> {
+  const providers = await getReadingProvidersByModelRefIds(models.map((model) => model.id));
+  return models.map((model) => ({ ...model, readingProvider: providers.get(model.id) ?? null }));
+}
+
+/** Bản dành cho admin UI — các call site sinh nội dung không cần pref này nên giữ getAllModels() nguyên vẹn. */
+async function getAllModelsWithReadingProvider(): Promise<AiModelWithReadingProvider[]> {
+  return attachReadingProvider(await getAllModels());
+}
+
+async function getModelByIdWithReadingProvider(id: number): Promise<AiModelWithReadingProvider | null> {
+  const model = await getModelById(id);
+  if (!model) return null;
+  const [withProvider] = await attachReadingProvider([model]);
+  return withProvider ?? null;
+}
+
 export default {
   getAllModels,
   getActiveModels,
@@ -268,5 +400,10 @@ export default {
   updateModel,
   syncModelPricing,
   syncAllModelsPricing,
-  computeCostUsd
+  computeCostUsd,
+  getReadingProvider,
+  getReadingProvidersByModelRefIds,
+  setReadingProvider,
+  getAllModelsWithReadingProvider,
+  getModelByIdWithReadingProvider
 };

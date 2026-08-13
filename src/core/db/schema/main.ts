@@ -84,6 +84,41 @@ export type EnglishQuestionPool = typeof englishQuestionPool.$inferSelect;
 export type InsertEnglishQuestionPool = typeof englishQuestionPool.$inferInsert;
 
 // ----------------------------------------------------------------------------
+// Reading passages — bài đọc ngắn sinh bằng LLM từ (topicName, cefrLevel).
+// KHÁC hẳn quizType 'reading' (quiz đọc hiểu + mental math) ở english_question_pool:
+// đây là nội dung thuần, chưa có câu hỏi. Bucket 2 chiều (cefrLevel, topicId).
+// ----------------------------------------------------------------------------
+
+export const englishReadingPassage = pgTable(
+  'english_reading_passages',
+  {
+    id: serial().primaryKey(),
+    title: text().notNull(),
+    paragraphs: jsonb().$type<string[]>().notNull(),
+    // Đếm lại server-side từ paragraphs, không tin số model trả về.
+    wordCount: integer().notNull(),
+    cefrLevel: text().notNull(),
+    topicId: integer().references(() => englishTopic.id),
+    // Snapshot tên topic lúc sinh — chính là input đã đưa vào prompt.
+    topicName: text(),
+    model: text().notNull(),
+    tokenIn: integer().default(0).notNull(),
+    tokenOut: integer().default(0).notNull(),
+    // Tắt bài kém mà không cần xoá (bài đã phát cho người học vẫn tra cứu được).
+    isActive: boolean().default(true).notNull(),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow()
+  },
+  (t) => [
+    index('idx_reading_passages_bucket').on(t.cefrLevel, t.topicId),
+    index('idx_reading_passages_created_at').on(t.createdAt)
+  ]
+);
+
+export type EnglishReadingPassage = typeof englishReadingPassage.$inferSelect;
+export type InsertEnglishReadingPassage = typeof englishReadingPassage.$inferInsert;
+
+// ----------------------------------------------------------------------------
 // Cron job tracking (question generation runs / buckets / model attempts)
 // ----------------------------------------------------------------------------
 
@@ -271,10 +306,13 @@ export const aiModel = pgTable('ai_models', {
   modelId: text().notNull().unique(),
   isActive: boolean().default(true).notNull(),
 
-  // Model có được chọn cho từng context sinh câu hỏi hay không, và provider routing
-  // riêng cho mỗi context (schedule = cron/on-demand tự động, manual = admin trigger).
+  // Model có được chọn cho từng context sinh nội dung hay không, và provider routing
+  // riêng cho mỗi context (schedule = cron/on-demand tự động, manual = admin trigger,
+  // reading = sinh reading passage). Provider của schedule/manual nằm ở cột jsonb dưới
+  // đây; riêng reading lưu normalize ở ai_model_provider_prefs (xem bên dưới).
   scheduleEnabled: boolean().default(true).notNull(),
   manualEnabled: boolean().default(true).notNull(),
+  readingEnabled: boolean().default(true).notNull(),
   scheduleProvider: jsonb().$type<ProviderPreferencesJson>(),
   manualProvider: jsonb().$type<ProviderPreferencesJson>(),
 
@@ -291,6 +329,72 @@ export const aiModel = pgTable('ai_models', {
 
 export type AiModel = typeof aiModel.$inferSelect;
 export type InsertAiModel = typeof aiModel.$inferInsert;
+
+// ----------------------------------------------------------------------------
+// Provider preferences dạng normalize (thay cho blob jsonb).
+// Hiện chỉ context 'reading' dùng 2 bảng này; scheduleProvider/manualProvider vẫn
+// là cột jsonb trên ai_models. Cột `context` có sẵn để sau chuyển nốt 2 context kia
+// sang đây thì chỉ cần thêm row, không phải đổi schema/unique index.
+// Shape lắp lại đúng ProviderPreferencesJson qua providerPref.mapper.ts.
+// ----------------------------------------------------------------------------
+
+export const PROVIDER_PREF_CONTEXTS = ['reading'] as const;
+export type ProviderPrefContext = (typeof PROVIDER_PREF_CONTEXTS)[number];
+
+export const PROVIDER_PREF_VALUE_KINDS = ['order', 'ignore', 'only', 'quantization'] as const;
+export type ProviderPrefValueKind = (typeof PROVIDER_PREF_VALUE_KINDS)[number];
+
+export const aiModelProviderPref = pgTable(
+  'ai_model_provider_prefs',
+  {
+    id: serial().primaryKey(),
+    modelRefId: integer()
+      .notNull()
+      .references(() => aiModel.id),
+    context: text().default('reading').notNull(),
+    allowFallbacks: boolean(),
+    requireParameters: boolean(),
+    dataCollection: text(),
+    sort: text(),
+    zdr: boolean(),
+    // OpenRouter nhận maxPrice dạng string, ở đây lưu số cho đúng kiểu — mapper lo
+    // đổi qua lại (Number khi ghi, String khi assemble).
+    maxPricePrompt: doublePrecision(),
+    maxPriceCompletion: doublePrecision(),
+    maxPriceRequest: doublePrecision(),
+    maxPriceImage: doublePrecision(),
+    maxPriceAudio: doublePrecision(),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow()
+  },
+  (t) => [uniqueIndex('ai_model_provider_prefs_model_context_unique_idx').on(t.modelRefId, t.context)]
+);
+
+export type AiModelProviderPref = typeof aiModelProviderPref.$inferSelect;
+export type InsertAiModelProviderPref = typeof aiModelProviderPref.$inferInsert;
+
+// Các field dạng mảng của ProviderPreferences (order/ignore/only/quantizations) gộp
+// chung một bảng, phân biệt bằng `kind`. `position` chỉ có ý nghĩa với kind='order'.
+export const aiModelProviderPrefValue = pgTable(
+  'ai_model_provider_pref_values',
+  {
+    id: serial().primaryKey(),
+    prefRefId: integer()
+      .notNull()
+      .references(() => aiModelProviderPref.id),
+    kind: text().notNull(),
+    value: text().notNull(),
+    position: integer().default(0).notNull(),
+    createdAt: timestamp().defaultNow()
+  },
+  (t) => [
+    uniqueIndex('ai_model_provider_pref_values_unique_idx').on(t.prefRefId, t.kind, t.value),
+    index('ai_model_provider_pref_values_pref_idx').on(t.prefRefId)
+  ]
+);
+
+export type AiModelProviderPrefValue = typeof aiModelProviderPrefValue.$inferSelect;
+export type InsertAiModelProviderPrefValue = typeof aiModelProviderPrefValue.$inferInsert;
 
 // ----------------------------------------------------------------------------
 // Tenants (multi-tenant auth) — mỗi client (bot/server) là 1 tenant, xác thực

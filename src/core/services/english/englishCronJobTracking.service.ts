@@ -11,13 +11,16 @@ import {
 } from '@/core/db/schema/main';
 
 export type EnglishCronJobStatus = 'running' | 'success' | 'partial_success' | 'failed' | 'skipped';
-export type EnglishCronJobKey = 'question_gen' | 'pool_refill' | 'manual_fill';
+export type EnglishCronJobKey =
+  'question_gen' | 'pool_refill' | 'manual_fill' | 'reading_refill' | 'reading_manual_fill';
 export type EnglishCronJobTrigger = 'bullmq' | 'schedule' | 'manual' | 'manual_retry';
 export type EnglishCronJobErrorPhase =
   | 'scan_topics'
   | 'pool_count'
   | 'generate_model'
   | 'push_questions'
+  | 'reading_count'
+  | 'insert_readings'
   | 'flow_create'
   | 'manual_retry'
   | 'lock_cleanup'

@@ -29,6 +29,13 @@
       "when": 1786246342830,
       "tag": "0003_tearful_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786580006518,
+      "tag": "0004_glossy_joystick",
+      "breakpoints": true
     }
   ]
 }
