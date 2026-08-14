@@ -2,7 +2,7 @@ import { type EngLevel } from '../questionTypes';
 
 // Reading passage = bài đọc thuần, KHÔNG kèm câu hỏi (khác hẳn reading-prompt.ts —
 // file đó sinh quiz đọc hiểu + mental math). Toàn bộ rule dưới đây bám theo
-// reading-prompt-guideline.md ở root repo; sửa guideline thì sửa cả file này.
+// docs/reading-prompt-guideline.md; sửa guideline thì sửa cả file này.
 
 export interface ReadingPassage {
   title: string;
@@ -12,30 +12,36 @@ export interface ReadingPassage {
   cefrLevel: EngLevel;
 }
 
-// Guideline mục 2. Dùng cả ở prompt lẫn validate sau khi model trả về.
-export const CEFR_WORD_BANDS: Record<EngLevel, { min: number; max: number }> = {
-  A1: { min: 70, max: 100 },
-  A2: { min: 90, max: 130 },
-  B1: { min: 120, max: 170 },
-  B2: { min: 140, max: 190 }
-};
+/** Guideline mục 2: mọi CEFR level dùng chung một band độ dài. */
+export const READING_WORD_BAND = { min: 150, max: 220 } as const;
 
-// Guideline mục 6 + 7 gộp lại theo từng level.
+/**
+ * Ngưỡng accept khi validate bài model trả về — nới nhẹ quanh band vì cách đếm từ của
+ * model không khớp tuyệt đối với countPassageWords (split whitespace). Loại quá gắt thì
+ * tỉ lệ hỏng batch cao mà chất lượng không hơn.
+ */
+export const READING_WORD_ACCEPT = { min: 140, max: 235 } as const;
+
+// Guideline mục 11. Độ dài giống nhau ở mọi level nên level CHỈ được thể hiện qua từ
+// vựng, độ phức tạp câu và cách triển khai ý.
 const LEVEL_GUIDES: Record<EngLevel, string> = {
-  A1: 'Very common everyday words only. Short simple sentences, mostly present tense. Avoid subordinate clauses and phrasal verbs beyond the most basic ones.',
+  A1: 'Very common everyday words only. Short simple sentences, mostly present tense. Avoid embedded clauses and phrasal verbs beyond the most basic ones. Grammar complexity must stay low.',
   A2: 'Common everyday vocabulary plus a few useful new words. Simple and compound sentences; past and future tenses are fine. Keep clause chains short.',
-  B1: 'Intermediate vocabulary including some useful collocations. Compound and complex sentences in moderation; a mix of tenses is fine, but keep the narrative easy to follow.',
-  B2: 'Natural vocabulary including idiomatic expressions where they fit. More complex structures (relative clauses, conditionals, passive) are allowed, but the writing must still read smoothly.'
+  B1: 'Intermediate vocabulary including some useful collocations. Compound and complex sentences in moderation; connectors and fuller description are fine, but keep the narrative easy to follow.',
+  B2: 'Natural vocabulary including idiomatic expressions where they fit. More complex structures (relative clauses, conditionals, passive) and more varied sentence patterns are allowed, but the writing must still read smoothly.'
 };
 
-export const QUESTION_ANGLES = [
-  'Detail — a specific fact stated in the passage',
-  'Reason — why someone did something',
-  'Main idea — what the passage is mostly about',
-  'Inference — something strongly implied but not stated',
-  'Vocabulary in context — the meaning of a word as used here',
-  'Sequence — the order in which things happened',
-  'Cause & effect — what led to what'
+/**
+ * Guideline mục 5 — target mix của question points. Passage phải đỡ được 5-7 điểm này
+ * để pipeline sinh câu hỏi có cái mà chọn, dù cuối cùng chỉ dùng 3 câu.
+ */
+export const QUESTION_POINT_TARGETS = [
+  '2-3 explicit details — facts stated outright in the text',
+  '1 reason / cause — why someone did something',
+  '1 inference — something not stated, but supported by at least TWO separate clues in the text',
+  '1 vocabulary in context — a useful word whose meaning is recoverable from the surrounding sentences',
+  '1 main idea / purpose — what the passage is mostly about',
+  '1 sequence or cause-effect point — the order things happened, or what led to what (when it fits)'
 ] as const;
 
 export function countWords(text: string): number {
@@ -53,7 +59,7 @@ BATCH GENERATION — ${count} PASSAGES REQUIRED:
 Return EXACTLY ${count} independent passages in the "passages" array.
 
 Each passage MUST independently satisfy EVERY rule in this prompt as if it were generated alone:
-  - Its own single central situation, its own 3-6 facts, its own Situation → Development → Result arc
+  - Its own single central situation, its own 5-7 information points, its own Situation → Development → Result arc
   - Its own word count inside the required band
   - Its own title
 
@@ -67,6 +73,7 @@ COMMON BATCH FAILURES — avoid:
   - Writing passage 1 carefully then rushing the rest
   - Reusing the same "someone forgets something and then fixes it" shape across items
   - Drifting outside the word band on later items
+  - Letting later passages thin out until only detail questions could be asked about them
 `;
 }
 
@@ -108,7 +115,7 @@ export function buildReadingPassagePrompt(input: {
 }): string {
   const { topicName, cefrLevel } = input;
   const count = input.count ?? 1;
-  const band = CEFR_WORD_BANDS[cefrLevel];
+  const { min, max } = READING_WORD_BAND;
 
   return `You are a reading-passage writer for Vietnamese learners of English.
 
@@ -127,46 +134,83 @@ This is a HARD CONSTRAINT, not a suggestion. The situation in the passage must p
 
 ${LEVEL_GUIDES[cefrLevel]}
 
-Length: ${band.min}-${band.max} words total, across all paragraphs.
-- Do NOT pad the story to reach the word count. A tight ${band.min}-word passage beats a padded ${band.max}-word one.
+Every level uses the SAME length. The level must show through vocabulary, sentence complexity and how ideas are connected — NEVER through how long the passage is. Do not stretch sentences at a low level to fill space, and do not compress a high level into simple ones.
+
+Length: ${min}-${max} words total, across all paragraphs — this applies to every CEFR level.
+- Do NOT pad the story to reach the word count. A tight ${min}-word passage beats a padded ${max}-word one.
 - Do NOT add sentences that carry no information.
 
 ${buildSchemaBlock(count, cefrLevel, topicName)}
 
 ─── STRUCTURE ──────────────────────────────────────────────────────────────────
 
-Exactly ONE central situation per passage, told in 2-4 paragraphs following this arc:
+Exactly ONE central situation per passage, told in 3-4 paragraphs following this arc:
   1. Situation — who, where, what is going on
   2. Development — the problem, the complication, or the action taken
   3. Result — how it ended: a decision, a change, a small realisation
 
-Include 3-6 clear facts or details. Every fact must connect logically to the others — no loose trivia dropped in.
-The passage must be self-contained: everything needed to understand it is inside it.
-Favour concrete people, places, actions, problems and decisions over general statements.
+Include 5-7 meaningful information points — a character, a setting, an action, a reason, a problem, a decision, a result, a telling detail. Every one must connect logically to the others; no loose trivia dropped in.
+
+- Spread the information across the passage. Do NOT pack the useful facts into one sentence and leave the rest empty.
+- Every paragraph must contribute at least one piece of meaningful information.
+- Favour concrete people, places, actions, problems and decisions over general statements.
+- The passage must be self-contained: everything needed to understand it is inside it.
 
 "title": a short natural title (3-8 words) for the story. Not a summary of the moral, not a question.
 "paragraphs": an array of paragraph strings, in order. No newline characters inside a paragraph.
 "wordCount": the ACTUAL number of words across all paragraphs. Count them.
 
-─── QUESTIONABILITY — the most important property ──────────────────────────────
+─── QUESTION-READINESS — the most important property ───────────────────────────
 
-Another pipeline will generate 3 different comprehension questions from this passage. The passage must give it enough material to work with. A reader should be able to answer questions of these kinds using ONLY the passage:
+Another pipeline will generate 3 different comprehension questions from this passage. Your job is to leave it plenty to choose from: aim for 5-7 potential question points of these kinds.
 
-${QUESTION_ANGLES.map((angle, index) => `  ${index + 1}. ${angle}`).join('\n')}
+${QUESTION_POINT_TARGETS.map((target, index) => `  ${index + 1}. ${target}`).join('\n')}
 
-Concretely, that means the passage needs:
-  - at least one clearly stated fact worth asking about (Detail)
-  - a stated or clearly implied motivation for someone's action (Reason / Inference)
-  - events that happen in a definite order (Sequence / Cause & effect)
-  - at least one useful word whose meaning is recoverable from context (Vocabulary)
+Not every passage needs all of them, but a passage that only supports one kind has failed.
 
-Do NOT write a passage so plain that only one kind of question is possible.
-Do NOT include contradictory information — every answer must be determinable from the text with no ambiguity.
+- Density: roughly every 40-60 words should carry at least one meaningful question point.
+- Independence: at least 3 of the points must sit on DIFFERENT information, so three questions can be answered in any order without one revealing the answer to another.
+- Diversity: the passage must support at least 2-3 different kinds from the list above. A passage where only detail questions are possible, or only vocabulary questions, is a failure.
+
+─── ANSWERABILITY ──────────────────────────────────────────────────────────────
+
+Every question written from this passage must be answerable using ONLY the passage. Aim for answers that are DEFENSIBLE, not merely plausible.
+
+- Details: stated outright, or paraphrased clearly enough that the answer is not in doubt.
+- Inference: supported by at least TWO separate clues in the text. Never require a leap the text does not back up.
+- Reason / cause-effect: the link between cause and action, or action and result, must be visible in the text.
+- Vocabulary in context: the surrounding sentences must give enough clues to work out the meaning.
+- Nothing may depend on outside knowledge, an unevidenced opinion, or information you did not write down.
+
+─── VOCABULARY ─────────────────────────────────────────────────────────────────
+
+- Most words should already be familiar at ${cefrLevel}; a few useful new ones are fine.
+- Prefer vocabulary a learner will actually use in daily life. Never use academic words the topic does not call for.
+- Include 1-3 useful target words whose meaning is recoverable from context.
+- Do NOT stuff hard words in just to create vocabulary questions.
+- Target words must not be obscure, must not have several meanings that fit equally well here, and must never be proper nouns.
+
+─── DISTRACTOR READINESS ───────────────────────────────────────────────────────
+
+The question pipeline may build multiple-choice options, so the passage should contain enough real material to draw wrong-but-tempting options from:
+  - a second person, place or object of the same kind (right fact, wrong subject)
+  - a second point in time (right fact, wrong moment)
+  - a second real action that is not the answer to a given question
+
+But do NOT let two facts sit so close together that a wrong option could also be read as correct. Each fact must be clearly attached to its own subject, time and outcome.
+
+─── AMBIGUITY PREVENTION ───────────────────────────────────────────────────────
+
+- Every pronoun must have one obvious antecedent. "they", "it", "this", "that" must never be guessable in two ways.
+- Never let two characters both plausibly be the subject of the same action.
+- When the order of events matters, make it unmistakable.
+- Keep cause and result clearly distinguishable from each other.
+- Do not use wording that supports two reasonable interpretations, and do not contradict yourself anywhere in the passage.
 
 ─── NATURALNESS ────────────────────────────────────────────────────────────────
 
 - Write the way a fluent native speaker actually writes: natural rhythm, natural word choice.
-- A short line of dialogue is fine when it fits.
+- A short line of dialogue is fine when it serves the situation — never add dialogue just for variety.
 - Avoid textbook voice ("Today I will tell you about...", "In conclusion...").
 - Avoid the flat, over-explained register that makes text feel machine-written.
 - Do not over-use formal language.
@@ -184,13 +228,14 @@ Output the passage only. No questions, no answer options, no vocabulary list, no
 
 ─── FINAL SELF-CHECK — before you output ───────────────────────────────────────
 
-1. Count the words across all paragraphs. Is the total between ${band.min} and ${band.max}?
-   - Over ${band.max}? Cut whole sentences that add the least information. Do NOT just trim adjectives.
-   - Under ${band.min}? Add one more concrete detail that a question could be asked about.
+1. Count the words across all paragraphs. Is the total between ${min} and ${max}?
+   - Over ${max}? Cut whole sentences that add the least information. Do NOT just trim adjectives.
+   - Under ${min}? Add one more concrete detail that a question could be asked about.
 2. Set "wordCount" to the number you just counted, not an estimate.
-3. Is there exactly one central situation, with a clear ending?
-4. Could you write a Detail question, a Reason question, and a Vocabulary-in-context question from this passage? If not, add what is missing.
-5. Does anything in the passage contradict anything else? Fix it.
+3. Are there 5-7 meaningful information points, spread across the paragraphs rather than bunched into one?
+4. Pick 3 DIFFERENT information points and check you could write one question on each — of at least two different kinds — answerable from the text alone, in any order.
+5. Does every pronoun point to exactly one person or thing? Could any sentence be read two ways? Fix it.
+6. Does anything in the passage contradict anything else? Fix it.
 
 ─── QUALITY CONSTRAINTS ────────────────────────────────────────────────────────
 

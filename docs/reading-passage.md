@@ -4,7 +4,7 @@ Bài đọc ngắn (~10 phút) sinh bằng LLM từ input `topicName` + `cefrLev
 
 > **Đừng nhầm với `quizType = 'reading'`.** Loại quiz đó (`prompt/reading-prompt.ts`, `POST /english/generate-reading`) là **quiz đọc hiểu + mental math**, nằm trong question pool. Reading passage ở đây là **nội dung thuần, chưa có câu hỏi**, nằm ở bảng riêng và pipeline riêng. Hai feature độc lập.
 
-Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](../reading-prompt-guideline.md) ở root repo. Sửa guideline thì sửa `prompt/reading-passage-prompt.ts` theo.
+Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](./reading-prompt-guideline.md). Sửa guideline thì sửa `prompt/reading-passage-prompt.ts` theo.
 
 ## Phạm vi hiện tại
 
@@ -29,27 +29,22 @@ Bảng `english_reading_passages`:
 
 Reading luôn gắn với 1 topic (prompt cần `topicName` để khoá chủ đề) — không có bucket "no topic".
 
-## Độ dài theo CEFR
+## Độ dài
 
-Bám guideline mục 2, khai ở `CEFR_WORD_BANDS` (`prompt/reading-passage-prompt.ts`):
-
-| Level | Số từ   |
-| ----- | ------- |
-| A1    | 70–100  |
-| A2    | 90–130  |
-| B1    | 120–170 |
-| B2    | 140–190 |
+Guideline mục 2 dùng **một band chung 150–220 từ cho mọi CEFR level** — level thể hiện qua từ vựng + độ phức tạp câu, không qua độ dài. Khai ở `READING_WORD_BAND` (`prompt/reading-passage-prompt.ts`).
 
 Sau khi model trả về, `study.service.generateReadingPassageBatch`:
 
 1. Chuẩn hoá khoảng trắng, bỏ đoạn rỗng
 2. **Đếm lại** `wordCount` và ghi đè giá trị model đưa ra
 3. Ép `cefrLevel` / `topic` về đúng input
-4. Loại bài nằm ngoài band **±15%**, bài dưới 2 đoạn, bài trùng title trong `excludeTitles`
+4. Loại bài ngoài `READING_WORD_ACCEPT` (**140–235**), bài dưới 2 đoạn, bài trùng title trong `excludeTitles`
+
+Ngưỡng accept rộng hơn band mục tiêu vì cách đếm từ của model không khớp tuyệt đối với `countPassageWords` (split whitespace); loại quá gắt thì hỏng batch mà chất lượng không hơn.
 
 Prompt có bước self-check bắt model tự đếm và cắt/bù trước khi xuất JSON — không có bước này model hay vượt band.
 
-Dashboard hiển thị badge số từ, tô cam khi lệch band (`CEFR_WORD_BANDS` ở `features/readings/constants.ts` phải khớp backend).
+Dashboard hiển thị badge số từ, tô cam khi lệch band (`READING_WORD_BAND` ở `features/readings/constants.ts` phải khớp backend). Bài sinh trước khi đổi band (70–190 từ) sẽ hiện lệch band — đúng như mong đợi, không phải bug.
 
 ## Chống lặp nội dung
 

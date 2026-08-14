@@ -17,7 +17,7 @@ import { buildReadingPrompt, type ReadingQuestion, VALID_TACTICS } from './promp
 import {
   buildReadingPassagePrompt,
   countPassageWords,
-  CEFR_WORD_BANDS,
+  READING_WORD_ACCEPT,
   type ReadingPassage
 } from './prompt/reading-passage-prompt';
 import { buildParagraphPrompt, type ParagraphQuestion } from './prompt/paragraph-prompt';
@@ -423,11 +423,8 @@ function isValidDescriptionQuestion(
 }
 
 // Model hay lệch word count và đôi khi tự đổi cefrLevel/topic — chuẩn hoá về đúng
-// input rồi mới lọc, thay vì loại thẳng bài chỉ vì model điền sai metadata.
-// Tolerance ±15%: band trong guideline là mục tiêu biên tập, không phải hard limit;
-// loại quá gắt thì tỉ lệ hỏng batch cao mà chất lượng không hơn.
-const WORD_COUNT_TOLERANCE = 0.15;
-
+// input rồi mới lọc, thay vì loại thẳng bài chỉ vì model điền sai metadata. Ngưỡng
+// accept (READING_WORD_ACCEPT) rộng hơn band mục tiêu một chút, xem prompt file.
 function normalizeReadingPassage(raw: ReadingPassage, ctx: ReadingPassageContext): ReadingPassage {
   const paragraphs = raw.paragraphs.map((paragraph) => paragraph.replace(/\s+/g, ' ').trim()).filter(Boolean);
   return {
@@ -442,10 +439,7 @@ function normalizeReadingPassage(raw: ReadingPassage, ctx: ReadingPassageContext
 function isValidReadingPassage(passage: ReadingPassage, excludeTitles: string[]): boolean {
   if (!passage.title || passage.paragraphs.length < 2) return false;
 
-  const band = CEFR_WORD_BANDS[passage.cefrLevel];
-  const min = Math.floor(band.min * (1 - WORD_COUNT_TOLERANCE));
-  const max = Math.ceil(band.max * (1 + WORD_COUNT_TOLERANCE));
-  if (passage.wordCount < min || passage.wordCount > max) return false;
+  if (passage.wordCount < READING_WORD_ACCEPT.min || passage.wordCount > READING_WORD_ACCEPT.max) return false;
 
   const normalizedTitle = passage.title.toLowerCase();
   return !excludeTitles.some((title) => title.trim().toLowerCase() === normalizedTitle);
@@ -1198,7 +1192,9 @@ class StudyService {
       provider: ctx.provider,
       instructions: systemInstruction,
       input: `Write exactly ${count} reading passage(s) about "${ctx.topicName}" at ${ctx.cefrLevel} level.`,
-      maxOutputTokens: 1200 * count,
+      // Band mới (150-220 từ mọi level) dài hơn hẳn band cũ ở A1/A2 — trần 1200 cũ dễ
+      // bị cắt giữa JSON khi batch nhiều bài.
+      maxOutputTokens: 1600 * count,
       // Cao hơn các quizType khác: guideline đặt "variety" thành yêu cầu cứng, lặp plot
       // giữa các lần sinh là lỗi chất lượng chứ không phải chuyện nhỏ.
       temperature: 0.95
