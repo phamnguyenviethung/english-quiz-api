@@ -1,3 +1,4 @@
+import _ from 'lodash';
 import { z } from 'zod';
 import {
   generateStructuredOutput,
@@ -20,6 +21,8 @@ import {
   READING_WORD_ACCEPT,
   type ReadingPassage
 } from './prompt/reading-passage-prompt';
+import { buildReadingQuestionPrompt, OPTIONS_PER_QUESTION, type ReadingQuestionDraft } from './prompt/reading-question';
+import { READING_QUESTION_TYPES, selectQuestionTypes, type ReadingQuestionType } from './readingQuestionTypes';
 import { buildParagraphPrompt, type ParagraphQuestion } from './prompt/paragraph-prompt';
 import { buildPhrasePrompt, type PhraseQuestion } from './prompt/phrase-prompt';
 import { buildSlangPrompt, type SlangQuestion } from './prompt/slang-prompt';
@@ -42,6 +45,7 @@ export type {
   PhraseQuestion,
   ReadingPassage,
   ReadingQuestion,
+  ReadingQuestionDraft,
   SlangQuestion,
   SynonymQuestion,
   VocabQuestion,
@@ -154,6 +158,18 @@ export const ReadingPassageSchema = z.object({
   cefrLevel: z.enum(ENG_LEVELS)
 });
 
+export const ReadingQuestionDraftSchema = z.object({
+  quizType: z.enum(READING_QUESTION_TYPES),
+  question: z.string(),
+  options: z.array(z.string()).length(OPTIONS_PER_QUESTION),
+  correctAnswer: z
+    .number()
+    .int()
+    .min(0)
+    .max(OPTIONS_PER_QUESTION - 1),
+  explanation: z.string()
+});
+
 // Response shape metadata dùng cho OpenAPI (src/api/common/responseSchemas.ts) — usage
 // field trả về từ generateStructuredOutput, optional khi provider không trả token count.
 export const UsageSchema = z.object({
@@ -174,6 +190,13 @@ const SlangBatchSchema = z.object({ questions: z.array(SlangQuestionSchema).min(
 const OddOneOutBatchSchema = z.object({ questions: z.array(OddOneOutQuestionSchema).min(1).max(5) });
 const ReadingBatchSchema = z.object({ questions: z.array(ReadingQuestionSchema).min(1).max(5) });
 const ReadingPassageBatchSchema = z.object({ passages: z.array(ReadingPassageSchema).min(1).max(5) });
+// KHÔNG để nullable. Schema này được đổi thành JSON Schema của tool nên `null` hợp lệ ở
+// đây là một đường thoát ngay trong chữ ký hàm — đo thực tế: model yếu vin vào đó để né
+// cả những type dễ như detail, đẩy tỉ lệ reject cả bộ lên 30-60%. Bỏ nullable thì model
+// buộc phải trả về object.
+const ReadingQuestionResponseSchema = z.object({
+  question: ReadingQuestionDraftSchema
+});
 
 export const ParagraphQuestionSchema = z.object({
   paragraph: z.string(),
@@ -229,6 +252,35 @@ export interface ReadingPassageContext {
 export interface ReadingPassageBatchOptions {
   count: number;
   excludeTitles?: string[];
+}
+
+/** Context sinh câu hỏi TỪ một passage đã lưu — mang theo nội dung bài để nhét vào prompt. */
+export interface ReadingQuestionContext {
+  passageId: number;
+  title: string;
+  paragraphs: string[];
+  cefrLevel: EngLevel;
+  topicName: string;
+  model: string;
+  provider?: ProviderPreferencesJson;
+}
+
+export interface ReadingQuestionBatchOptions {
+  count: number;
+  excludeQuestions?: string[];
+}
+
+/** Một lần gọi LLM cho một câu. Job dùng để ghi từng model attempt riêng. */
+export interface ReadingQuestionAttempt {
+  quizType: ReadingQuestionType;
+  ok: boolean;
+  usage?: StructuredOutputUsage;
+}
+
+export interface ReadingQuestionSetResult {
+  questions: ReadingQuestionDraft[];
+  /** Chưa gộp token — job cần từng attempt để ghi vào english_cron_job_model_attempts. */
+  attempts: ReadingQuestionAttempt[];
 }
 
 interface BatchResult<T> {
@@ -443,6 +495,89 @@ function isValidReadingPassage(passage: ReadingPassage, excludeTitles: string[])
 
   const normalizedTitle = passage.title.toLowerCase();
   return !excludeTitles.some((title) => title.trim().toLowerCase() === normalizedTitle);
+}
+
+function normalizeReadingQuestionDraft(raw: ReadingQuestionDraft): ReadingQuestionDraft {
+  const collapse = (text: string) => text.replace(/\s+/g, ' ').trim();
+  return {
+    quizType: raw.quizType,
+    question: collapse(raw.question),
+    options: raw.options.map(collapse),
+    correctAnswer: raw.correctAnswer,
+    explanation: collapse(raw.explanation)
+  };
+}
+
+// Prompt đánh số đoạn ([1], [2]...) để model neo explanation vào đúng đoạn, nhưng người
+// học đọc bài dạng văn xuôi không có số. Câu hỏi/đáp án nhắc "paragraph 2" là lộ scaffold
+// của prompt và làm người học rối. Explanation thì được phép — field đó cho admin review.
+const PARAGRAPH_REFERENCE_PATTERN =
+  /\b(?:paragraph|para\.?)\s*\d|\bthe\s+(?:first|second|third|fourth|last)\s+paragraph\b/i;
+
+/**
+ * Zod đã chặn shape (đủ 4 option, correctAnswer trong [0,3]). Tầng này bắt các lỗi ngữ
+ * nghĩa mà schema không thấy: option trùng nhau, quizType ngoài allow-list của level,
+ * lộ số thứ tự đoạn, hoặc hỏi lại đúng câu đã có sẵn trên passage.
+ */
+function isValidReadingQuestionDraft(
+  draft: ReadingQuestionDraft,
+  expectedType: ReadingQuestionType,
+  excludeQuestions: string[]
+): boolean {
+  if (!draft.question || !draft.explanation) return false;
+  if (draft.options.some((option) => !option)) return false;
+
+  if (PARAGRAPH_REFERENCE_PATTERN.test(draft.question)) return false;
+  if (draft.options.some((option) => PARAGRAPH_REFERENCE_PATTERN.test(option))) return false;
+
+  const normalizedOptions = draft.options.map((option) => option.toLowerCase());
+  if (new Set(normalizedOptions).size !== normalizedOptions.length) return false;
+
+  // Type do server chỉ định. Model được giao inference mà trả về detail là đã không làm
+  // đúng việc — loại, chứ không nhận rồi coi như bộ vẫn hợp lệ.
+  if (draft.quizType !== expectedType) return false;
+
+  const normalizedQuestion = draft.question.toLowerCase();
+  return !excludeQuestions.some((question) => question.trim().toLowerCase() === normalizedQuestion);
+}
+
+/**
+ * Xáo vị trí đáp án ở server. Mỗi câu là một lần gọi riêng nên model không thể "rải vị trí
+ * đáp án đúng" giữa các câu như prompt cũ yêu cầu — có lần cả 3 câu cùng rơi vào B. Xáo ở
+ * đây biến việc đó từ nhờ model thành chắc chắn, và không tốn token.
+ */
+function shuffleReadingQuestionOptions(question: ReadingQuestionDraft): ReadingQuestionDraft {
+  const correct = question.options[question.correctAnswer];
+  const shuffled = _.shuffle(question.options);
+  return {
+    ...question,
+    options: shuffled,
+    correctAnswer: shuffled.findIndex((option) => option === correct)
+  };
+}
+
+/** Xáo cả bộ, đảm bảo không phải mọi câu đều cùng một vị trí đáp án. */
+function spreadCorrectAnswers(questions: ReadingQuestionDraft[]): ReadingQuestionDraft[] {
+  let result = questions.map(shuffleReadingQuestionOptions);
+  const optionCount = result[0]?.options.length ?? OPTIONS_PER_QUESTION;
+
+  // Chỉ có thể rải khi số câu <= số đáp án; nhiều hơn thì trùng vị trí là tất yếu.
+  for (let i = 0; i < 8 && result.length > 1 && result.length <= optionCount; i += 1) {
+    if (new Set(result.map((question) => question.correctAnswer)).size > 1) break;
+    result = result.map(shuffleReadingQuestionOptions);
+  }
+
+  return result;
+}
+
+/**
+ * Kiểm ở tầng BỘ, bù cho việc mỗi câu sinh riêng nên model không thấy các câu khác.
+ * Hai câu cùng đáp án đúng gần như chắc chắn đang hỏi cùng một thông tin — rẻ và bắt
+ * được ca trùng information point hay gặp nhất.
+ */
+function isValidReadingQuestionSet(questions: ReadingQuestionDraft[]): boolean {
+  const answers = questions.map((question) => (question.options[question.correctAnswer] ?? '').trim().toLowerCase());
+  return new Set(answers).size === answers.length;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -1208,6 +1343,100 @@ class StudyService {
     return { passages: valid, usage };
   }
 
+  // ─── Reading question (câu hỏi sinh từ passage đã lưu) ─────────────────────
+
+  /**
+   * Sinh ĐÚNG 1 câu theo type được chỉ định. Trả `null` khi model từ chối (bài không đủ
+   * evidence cho type đó) hoặc khi câu trả về không qua validate.
+   */
+  async generateReadingQuestionOfType(
+    ctx: ReadingQuestionContext,
+    input: { quizType: ReadingQuestionType; previousQuestions: string[] }
+  ): Promise<{ question: ReadingQuestionDraft | null; usage?: StructuredOutputUsage }> {
+    const { quizType, previousQuestions } = input;
+
+    const systemInstruction = buildReadingQuestionPrompt({
+      quizType,
+      title: ctx.title,
+      paragraphs: ctx.paragraphs,
+      cefrLevel: ctx.cefrLevel,
+      topicName: ctx.topicName,
+      previousQuestions
+    });
+
+    const { data, usage } = await generateStructuredOutput(ReadingQuestionResponseSchema, {
+      model: ctx.model,
+      provider: ctx.provider,
+      instructions: systemInstruction,
+      input: `Write exactly one "${quizType}" question about the passage "${ctx.title}" at ${ctx.cefrLevel} level.`,
+      maxOutputTokens: 450,
+      // Thấp hơn reading passage (0.95) có chủ ý: ở đây cần đúng đáp án và đúng evidence,
+      // phần variety đã do bài đọc gánh.
+      temperature: 0.7
+    });
+
+    const draft = normalizeReadingQuestionDraft(data.question);
+    if (!isValidReadingQuestionDraft(draft, quizType, previousQuestions)) {
+      logger.warn(`[StudyService] Invalid "${quizType}" draft rejected (passageId=${ctx.passageId})`);
+      return { question: null, usage };
+    }
+
+    return { question: draft, usage };
+  }
+
+  /**
+   * Sinh trọn bộ câu hỏi cho 1 bài: server chọn type trước, rồi gọi TUẦN TỰ từng câu.
+   *
+   * Chạy tuần tự chứ không song song là có chủ ý — mỗi câu nhận các câu trước làm
+   * exclusions, đây là cơ chế duy nhất giữ tính độc lập khi mỗi câu là một lần gọi riêng.
+   *
+   * All-or-nothing: thiếu dù 1 câu là trả mảng rỗng. Guideline mục 2.3 (3 câu độc lập)
+   * là thuộc tính của CẢ BỘ — nhận 1-2 câu lẻ là nhận một bộ đã vi phạm spec.
+   */
+  async generateReadingQuestionSet(
+    ctx: ReadingQuestionContext,
+    opts: ReadingQuestionBatchOptions
+  ): Promise<ReadingQuestionSetResult> {
+    const { count, excludeQuestions = [] } = opts;
+    const quizTypes = selectQuestionTypes(ctx.cefrLevel, count);
+
+    logger.info(
+      `[StudyService] Generating ${count} reading question(s) one-by-one ` +
+        `(passageId=${ctx.passageId} cefrLevel=${ctx.cefrLevel} types=${quizTypes.join(',')})`
+    );
+
+    const questions: ReadingQuestionDraft[] = [];
+    const attempts: ReadingQuestionAttempt[] = [];
+    const previousQuestions = [...excludeQuestions];
+
+    for (const quizType of quizTypes) {
+      const { question, usage } = await this.generateReadingQuestionOfType(ctx, {
+        quizType,
+        previousQuestions
+      });
+
+      attempts.push({ quizType, ok: question !== null, usage });
+
+      if (!question) {
+        logger.warn(`[StudyService] Reading question set rejected: "${quizType}" failed (passageId=${ctx.passageId})`);
+        return { questions: [], attempts };
+      }
+
+      questions.push(question);
+      previousQuestions.push(question.question);
+    }
+
+    if (!isValidReadingQuestionSet(questions)) {
+      logger.warn(
+        `[StudyService] Reading question set rejected: two questions share the same answer (passageId=${ctx.passageId})`
+      );
+      return { questions: [], attempts };
+    }
+
+    logger.info(`[StudyService] Reading question set ok: ${questions.map((q) => q.quizType).join(', ')}`);
+    return { questions: spreadCorrectAnswers(questions), attempts };
+  }
+
   // ─── Dispatch & Context ────────────────────────────────────────────────────
 
   /**
@@ -1243,6 +1472,27 @@ class StudyService {
     return {
       cefrLevel: input.cefrLevel,
       topicName: input.topicName,
+      model: resolved.model,
+      provider: resolved.provider
+    };
+  }
+
+  /**
+   * Như buildReadingPassageContext nhưng cho câu hỏi đọc hiểu — dùng chung model context
+   * 'reading'. Nhận thẳng record passage thay vì passageId để study.service không phải
+   * chạm DB (cả file này đang thuần LLM).
+   */
+  async buildReadingQuestionContext(input: {
+    passage: { id: number; title: string; paragraphs: string[]; cefrLevel: string; topicName: string | null };
+    model?: string;
+  }): Promise<ReadingQuestionContext> {
+    const resolved = await resolveStudyModel('reading', input.model);
+    return {
+      passageId: input.passage.id,
+      title: input.passage.title,
+      paragraphs: input.passage.paragraphs,
+      cefrLevel: input.passage.cefrLevel as EngLevel,
+      topicName: input.passage.topicName ?? '',
       model: resolved.model,
       provider: resolved.provider
     };

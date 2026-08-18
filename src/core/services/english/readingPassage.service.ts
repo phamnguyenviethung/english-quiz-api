@@ -1,7 +1,12 @@
-import { and, asc, count, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
-import { englishReadingPassage, englishTopic, type InsertEnglishReadingPassage } from '@/core/db/schema/main';
+import {
+  englishReadingPassage,
+  englishReadingQuestion,
+  englishTopic,
+  type InsertEnglishReadingPassage
+} from '@/core/db/schema/main';
 import { NotFoundException } from '@/core/exceptions';
 import { countPassageWords } from './prompt/reading-passage-prompt';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
@@ -340,7 +345,13 @@ export interface UpdateReadingPassageInput {
   isActive?: boolean;
 }
 
-/** Sửa paragraphs luôn kéo theo tính lại wordCount — không để 2 giá trị lệch nhau. */
+/**
+ * Sửa paragraphs luôn kéo theo tính lại wordCount — không để 2 giá trị lệch nhau.
+ *
+ * Đổi nội dung đoạn văn cũng làm mọi câu hỏi đọc hiểu của bài thành sai: chúng neo vào
+ * evidence trong đoạn cũ. Tắt (chứ không xoá) để admin còn xem lại, và scan sẽ tự thấy
+ * bài thiếu câu rồi sinh lại. Reset luôn questionGenAttempts vì đây là bài "mới".
+ */
 async function updatePassage(id: number, patch: UpdateReadingPassageInput): Promise<ReadingPassageRecord> {
   const updated = await db.transaction(async (tx) => {
     const [existing] = await tx
@@ -352,11 +363,22 @@ async function updatePassage(id: number, patch: UpdateReadingPassageInput): Prom
 
     const paragraphs = patch.paragraphs?.map((paragraph) => paragraph.trim()).filter(Boolean);
 
+    if (paragraphs) {
+      const stale = await tx
+        .update(englishReadingQuestion)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(and(eq(englishReadingQuestion.passageRefId, id), eq(englishReadingQuestion.isActive, true)))
+        .returning({ id: englishReadingQuestion.id });
+      if (stale.length > 0) {
+        logger.info(`[ReadingPassage] Deactivated ${stale.length} stale question(s) for passage id=${id}`);
+      }
+    }
+
     const [row] = await tx
       .update(englishReadingPassage)
       .set({
         ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
-        ...(paragraphs ? { paragraphs, wordCount: countPassageWords(paragraphs) } : {}),
+        ...(paragraphs ? { paragraphs, wordCount: countPassageWords(paragraphs), questionGenAttempts: 0 } : {}),
         ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
         updatedAt: new Date()
       })
@@ -379,6 +401,69 @@ async function deletePassage(id: number): Promise<void> {
     if (!deleted) throw new NotFoundException(`Không tìm thấy reading passage: ${id}`);
   });
   logger.info(`[ReadingPassage] Deleted passage id=${id}`);
+}
+
+export interface QuestionGenCandidate {
+  id: number;
+  title: string;
+  cefrLevel: string;
+  topicId: number | null;
+  topicName: string | null;
+  questionGenAttempts: number;
+}
+
+export interface QuestionGenCandidateFilter {
+  cefrLevels?: string[];
+  topicIds?: number[];
+  passageIds?: number[];
+  maxAttempts?: number;
+}
+
+/**
+ * Bài đủ điều kiện sinh câu hỏi: đang active và chưa vượt trần số lần sinh hỏng.
+ * Bài quá mỏng model sinh mãi không nổi 3 câu — không chặn thì cron gọi lại vô hạn.
+ */
+async function listQuestionGenCandidates(filter: QuestionGenCandidateFilter = {}): Promise<QuestionGenCandidate[]> {
+  const conditions = [eq(englishReadingPassage.isActive, true)];
+  if (filter.maxAttempts !== undefined) {
+    conditions.push(lt(englishReadingPassage.questionGenAttempts, filter.maxAttempts));
+  }
+  if (filter.cefrLevels && filter.cefrLevels.length > 0) {
+    conditions.push(inArray(englishReadingPassage.cefrLevel, filter.cefrLevels));
+  }
+  if (filter.topicIds && filter.topicIds.length > 0) {
+    conditions.push(inArray(englishReadingPassage.topicId, filter.topicIds));
+  }
+  if (filter.passageIds && filter.passageIds.length > 0) {
+    conditions.push(inArray(englishReadingPassage.id, filter.passageIds));
+  }
+
+  return db
+    .select({
+      id: englishReadingPassage.id,
+      title: englishReadingPassage.title,
+      cefrLevel: englishReadingPassage.cefrLevel,
+      topicId: englishReadingPassage.topicId,
+      topicName: englishReadingPassage.topicName,
+      questionGenAttempts: englishReadingPassage.questionGenAttempts
+    })
+    .from(englishReadingPassage)
+    .where(and(...conditions))
+    .orderBy(asc(englishReadingPassage.id));
+}
+
+async function incrementQuestionGenAttempts(id: number): Promise<void> {
+  await db
+    .update(englishReadingPassage)
+    .set({ questionGenAttempts: sql`${englishReadingPassage.questionGenAttempts} + 1`, updatedAt: new Date() })
+    .where(eq(englishReadingPassage.id, id));
+}
+
+async function resetQuestionGenAttempts(id: number): Promise<void> {
+  await db
+    .update(englishReadingPassage)
+    .set({ questionGenAttempts: 0, updatedAt: new Date() })
+    .where(eq(englishReadingPassage.id, id));
 }
 
 /** Topic đang active kèm số bài mỗi level — dùng cho stat ở dashboard. */
@@ -415,6 +500,9 @@ export default {
   insertPassages,
   updatePassage,
   deletePassage,
+  listQuestionGenCandidates,
+  incrementQuestionGenAttempts,
+  resetQuestionGenAttempts,
   getTopicCoverage,
   getMaxPerBucket,
   getRefillThreshold,

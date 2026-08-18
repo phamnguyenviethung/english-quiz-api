@@ -12,15 +12,24 @@ import {
 
 export type EnglishCronJobStatus = 'running' | 'success' | 'partial_success' | 'failed' | 'skipped';
 export type EnglishCronJobKey =
-  'question_gen' | 'pool_refill' | 'manual_fill' | 'reading_refill' | 'reading_manual_fill';
+  | 'question_gen'
+  | 'pool_refill'
+  | 'manual_fill'
+  | 'reading_refill'
+  | 'reading_manual_fill'
+  | 'reading_question_refill'
+  | 'reading_question_manual_fill';
 export type EnglishCronJobTrigger = 'bullmq' | 'schedule' | 'manual' | 'manual_retry';
 export type EnglishCronJobErrorPhase =
   | 'scan_topics'
+  | 'scan_passages'
   | 'pool_count'
   | 'generate_model'
   | 'push_questions'
   | 'reading_count'
   | 'insert_readings'
+  | 'reading_question_count'
+  | 'insert_reading_questions'
   | 'flow_create'
   | 'manual_retry'
   | 'lock_cleanup'
@@ -283,6 +292,12 @@ async function startBucket(
     topicName: string | null;
     requestedCount: number;
     metadata?: Record<string, unknown>;
+    /**
+     * Ghi đè bucketKey mặc định. Cần cho pipeline có bucket không phải tổ hợp
+     * (engLevel, topicId, quizType) — ví dụ reading question, bucket là 1 passage nên
+     * mọi bài cùng level+topic sẽ đụng chung key nếu để hàm tự tính.
+     */
+    bucketKey?: string;
   }
 ): Promise<EnglishCronBucketRef | null> {
   if (!run) return null;
@@ -291,7 +306,7 @@ async function startBucket(
       .insert(englishCronJobBucket)
       .values({
         runRefId: run.id,
-        bucketKey: bucketKey(input),
+        bucketKey: input.bucketKey ?? bucketKey(input),
         status: 'running',
         engLevel: input.engLevel,
         quizType: input.quizType,

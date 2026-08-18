@@ -106,6 +106,9 @@ export const englishReadingPassage = pgTable(
     tokenOut: integer().default(0).notNull(),
     // Tắt bài kém mà không cần xoá (bài đã phát cho người học vẫn tra cứu được).
     isActive: boolean().default(true).notNull(),
+    // Số lần pipeline sinh câu hỏi thất bại trên bài này. Bài quá mỏng sẽ hỏng mãi,
+    // nếu không đếm thì cron gọi lại mỗi lần chạy và đốt token vô hạn.
+    questionGenAttempts: integer().default(0).notNull(),
     createdAt: timestamp().defaultNow(),
     updatedAt: timestamp().defaultNow()
   },
@@ -117,6 +120,47 @@ export const englishReadingPassage = pgTable(
 
 export type EnglishReadingPassage = typeof englishReadingPassage.$inferSelect;
 export type InsertEnglishReadingPassage = typeof englishReadingPassage.$inferInsert;
+
+// ----------------------------------------------------------------------------
+// Reading questions — câu hỏi đọc hiểu sinh TỪ một bài đọc đã lưu.
+// Bucket ở đây là 1 passage (đủ questionsPerPassage câu hay chưa), khác hẳn bucket
+// (cefrLevel, topicId) của bài đọc và (engLevel, quizType, topicId) của question pool.
+// ----------------------------------------------------------------------------
+
+export const englishReadingQuestion = pgTable(
+  'english_reading_questions',
+  {
+    id: serial().primaryKey(),
+    passageRefId: integer()
+      .notNull()
+      .references(() => englishReadingPassage.id, { onDelete: 'cascade' }),
+    quizType: text().notNull(),
+    question: text().notNull(),
+    options: jsonb().$type<string[]>().notNull(),
+    // Index 0-based vào options, không phải chữ cái cũng không phải nội dung đáp án.
+    correctAnswer: integer().notNull(),
+    // Một câu tiếng Việt, trỏ tới đoạn chứa evidence.
+    explanation: text().notNull(),
+    // Snapshot từ passage để list/filter không phải join.
+    cefrLevel: text().notNull(),
+    topicId: integer().references(() => englishTopic.id),
+    topicName: text(),
+    model: text().notNull(),
+    tokenIn: integer().default(0).notNull(),
+    tokenOut: integer().default(0).notNull(),
+    isActive: boolean().default(true).notNull(),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow()
+  },
+  (t) => [
+    index('idx_reading_questions_passage').on(t.passageRefId),
+    index('idx_reading_questions_bucket').on(t.cefrLevel, t.topicId),
+    index('idx_reading_questions_created_at').on(t.createdAt)
+  ]
+);
+
+export type EnglishReadingQuestion = typeof englishReadingQuestion.$inferSelect;
+export type InsertEnglishReadingQuestion = typeof englishReadingQuestion.$inferInsert;
 
 // ----------------------------------------------------------------------------
 // Cron job tracking (question generation runs / buckets / model attempts)

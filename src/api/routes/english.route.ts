@@ -17,7 +17,8 @@ import {
   CronRunDetailSchema,
   CronUsageAnalyticsItemSchema,
   GenerateQuestionResponseSchema,
-  GenerateReadingResponseSchema
+  GenerateReadingResponseSchema,
+  ReadingWithQuestionsSchema
 } from '@/api/common/responseSchemas';
 import { tenantAuthPlugin } from '@/api/plugins/tenantAuth.plugin';
 import englishController from '@/api/controllers/english.controller';
@@ -354,6 +355,76 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       ...COMMON_ERRORS
     }
   })
+
+  // ── Readings (bài đọc kèm câu hỏi) ──────────────────────────────────────────
+  .get(
+    '/readings/pop',
+    async ({ query, tenant }) =>
+      ok(
+        await englishController.popReading(tenant, {
+          cefrLevel: query.cefrLevel,
+          topicId: query.topicId,
+          excludeIds: englishController.parseExcludeIds(query.excludeIds)
+        })
+      ),
+    {
+      auth: true,
+      query: t.Object({
+        cefrLevel: t.Optional(EngLevelSchema),
+        topicId: t.Optional(t.Numeric()),
+        excludeIds: t.Optional(
+          t.String({
+            description:
+              'CSV id BÀI ĐỌC cần loại, vd "12,88". Tối đa 200 id. Dùng để client tự chống lặp bài theo end-user.'
+          })
+        )
+      }),
+      detail: {
+        tags: ['English / Readings'],
+        summary: 'Pop a reading passage with its questions',
+        description:
+          'Lấy 1 bài đọc random kèm trọn bộ câu hỏi đọc hiểu. Chỉ trả bài đã **đủ** ' +
+          '`reading_question.questionsPerPassage` câu đang active — bài nửa vời không bao giờ được phục vụ. ' +
+          'Bài KHÔNG bị xoá, kho dùng lại được. Bỏ trống `topicId` = mọi topic tenant được cấp (bài đọc luôn ' +
+          'gắn topic nên tenant bị giới hạn sẽ chỉ thấy topic trong allow-list). `topicId` ngoài allow-list ' +
+          'trả 403. Không có bài nào sẵn sàng trả 404.',
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(ReadingWithQuestionsSchema),
+        400: ApiErrorSchema,
+        403: ApiErrorSchema,
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
+  .get(
+    '/readings/count',
+    async ({ query, tenant }) =>
+      ok(await englishController.countReadings(tenant, { cefrLevel: query.cefrLevel, topicId: query.topicId })),
+    {
+      auth: true,
+      query: t.Object({
+        cefrLevel: t.Optional(EngLevelSchema),
+        topicId: t.Optional(t.Numeric())
+      }),
+      detail: {
+        tags: ['English / Readings'],
+        summary: 'Count ready reading passages',
+        description:
+          'Số bài đọc đã sẵn sàng phục vụ (active và đủ câu hỏi) trong phạm vi filter. Áp dụng cùng allow-list ' +
+          'topic như /readings/pop.',
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(t.Object({ cefrLevel: t.Nullable(t.String()), topicId: t.Nullable(t.Number()), count: t.Number() })),
+        400: ApiErrorSchema,
+        403: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
 
   // ── Topics ──────────────────────────────────────────────────────────────────
   .get('/topics', async () => ok(await englishController.listTopics()), {

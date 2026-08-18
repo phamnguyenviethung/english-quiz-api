@@ -8,8 +8,8 @@ Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](./reading-prompt-g
 
 ## Phạm vi hiện tại
 
-- Chỉ sinh **bài đọc**. Sinh câu hỏi từ bài đọc là pipeline riêng, chưa làm (đúng mục 10 của guideline).
-- API **chỉ admin** (`/admin/readings/*`). Chưa expose cho tenant/bot.
+- File này chỉ nói về **bài đọc**. Sinh câu hỏi từ bài đọc là pipeline riêng — xem [`reading-question.md`](./reading-question.md).
+- API quản trị bài đọc **chỉ admin** (`/admin/readings/*`). Bot lấy bài kèm câu hỏi qua `/english/readings/pop` (thuộc pipeline reading question).
 
 ## Mô hình dữ liệu
 
@@ -99,8 +99,16 @@ Toàn bộ dưới `/admin/readings`, yêu cầu session admin.
 | `POST`   | `/admin/readings/generate` | Sinh thử 1 bài, **KHÔNG lưu**. Model trả bài không hợp lệ → 400                                                                                                              |
 | `POST`   | `/admin/readings/refill`   | Trigger sinh hàng loạt → `{ runId, totalBuckets }`, theo dõi qua `GET /english/cron/runs/:runId`                                                                             |
 | `GET`    | `/admin/readings/:id`      | Chi tiết                                                                                                                                                                     |
-| `PATCH`  | `/admin/readings/:id`      | Sửa `title`/`paragraphs`/`isActive`. Sửa `paragraphs` tự tính lại `wordCount`                                                                                                |
+| `PATCH`  | `/admin/readings/:id`      | Sửa `title`/`paragraphs`/`isActive`. Sửa `paragraphs` tự tính lại `wordCount` **và tắt toàn bộ câu hỏi của bài** (xem dưới)                                                  |
 | `DELETE` | `/admin/readings/:id`      | Xoá hẳn. Muốn giữ lại thì `PATCH { isActive: false }`                                                                                                                        |
+
+## Quan hệ với câu hỏi đọc hiểu
+
+Sửa `paragraphs` qua `PATCH /admin/readings/:id` sẽ **tắt (`isActive = false`) mọi câu hỏi** của bài trong cùng transaction, đồng thời reset `questionGenAttempts = 0`. Câu hỏi cũ neo vào evidence trong đoạn văn cũ nên đổi nội dung là làm chúng sai; tắt thay vì xoá để admin còn xem lại, và pipeline câu hỏi sẽ tự sinh lại ở lần chạy sau. Sửa mỗi `title`/`isActive` thì không đụng gì.
+
+`DELETE /admin/readings/:id` xoá luôn câu hỏi của bài (`ON DELETE CASCADE`).
+
+Cột `questionGenAttempts` trên bảng này thuộc pipeline câu hỏi — xem [`reading-question.md`](./reading-question.md).
 
 ## Dashboard
 

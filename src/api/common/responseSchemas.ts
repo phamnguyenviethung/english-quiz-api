@@ -289,6 +289,97 @@ export const ReadingBucketPreviewSchema = t.Object({
   })
 });
 
+// ── Reading questions ────────────────────────────────────────────────────────
+// Câu hỏi đọc hiểu sinh từ một reading passage. Bucket là 1 passage, không phải
+// tổ hợp (cefrLevel, topicId) như bài đọc.
+export const ReadingQuestionRecordSchema = t.Object({
+  id: t.Number(),
+  passageRefId: t.Number({ description: 'Bài đọc mà câu hỏi này thuộc về.' }),
+  quizType: t.String({ description: 'detail / inference / vocabulary_context / ... (theo CEFR level).' }),
+  question: t.String(),
+  options: t.Array(t.String(), { description: 'Đúng 4 đáp án.' }),
+  correctAnswer: t.Number({ description: 'Index 0-based vào options.' }),
+  explanation: t.String({ description: 'Một câu tiếng Việt, trỏ tới đoạn chứa evidence.' }),
+  cefrLevel: t.String(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  model: t.String(),
+  tokenIn: t.Number(),
+  tokenOut: t.Number(),
+  isActive: t.Boolean(),
+  createdAt: t.Nullable(DateTimeSchema),
+  updatedAt: t.Nullable(DateTimeSchema)
+});
+
+export const ReadingQuestionPageSchema = t.Object({
+  items: t.Array(ReadingQuestionRecordSchema),
+  page: t.Number({ description: 'Trang hiện tại, 1-based.' }),
+  pageSize: t.Number(),
+  total: t.Number({ description: 'Tổng số câu khớp filter, không phụ thuộc trang.' }),
+  totalPages: t.Number()
+});
+
+export const ReadingQuestionModelStatSchema = t.Object({
+  model: t.String(),
+  count: t.Number({ description: 'Số câu hỏi trong kho được sinh bởi model này.' })
+});
+
+// Câu sinh thử qua POST /admin/reading-questions/generate — chưa lưu nên không có id.
+export const GeneratedReadingQuestionsSchema = t.Object({
+  passage: t.Object({
+    id: t.Number(),
+    title: t.String(),
+    cefrLevel: t.String(),
+    topicName: t.Nullable(t.String())
+  }),
+  questions: t.Array(
+    t.Object({
+      quizType: t.String(),
+      question: t.String(),
+      options: t.Array(t.String()),
+      correctAnswer: t.Number(),
+      explanation: t.String()
+    })
+  ),
+  usage: t.Optional(t.Object({ inputTokens: t.Number(), outputTokens: t.Number(), model: t.String() }))
+});
+
+export const ReadingQuestionBucketSchema = t.Object({
+  bucketKey: t.String({ description: '`rq:{passageId}` — bucket của pipeline này là 1 bài đọc.' }),
+  passageId: t.Number(),
+  title: t.String(),
+  cefrLevel: t.String(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  currentCount: t.Number({ description: 'Số câu đang active của bài này.' }),
+  deficiency: t.Number({ description: 'reading_question.questionsPerPassage - currentCount.' }),
+  plannedCount: t.Number({ description: 'Số câu sẽ sinh cho bài này. 0 = bị scope bỏ qua.' })
+});
+
+export const ReadingQuestionBucketPreviewSchema = t.Object({
+  buckets: t.Array(ReadingQuestionBucketSchema),
+  summary: t.Object({
+    matchedPassages: t.Number({ description: 'Số bài khớp filter (kể cả bài sẽ bị bỏ qua).' }),
+    plannedPassages: t.Number(),
+    plannedQuestions: t.Number(),
+    questionsPerPassage: t.Number()
+  })
+});
+
+// Trả cho tenant/bot: bài đọc kèm trọn bộ câu hỏi.
+export const ReadingWithQuestionsSchema = t.Object({
+  passage: t.Object({
+    id: t.Number(),
+    title: t.String(),
+    paragraphs: t.Array(t.String()),
+    wordCount: t.Number(),
+    cefrLevel: t.String(),
+    topicId: t.Nullable(t.Number()),
+    topicName: t.Nullable(t.String())
+  }),
+  questions: t.Array(ReadingQuestionRecordSchema)
+});
+
 // ── English config ───────────────────────────────────────────────────────────
 // Zod schema có sẵn (englishConfig.defaults.ts) — dùng trực tiếp thay vì viết lại TypeBox.
 export const EnglishConfigSnapshotSchema = z.object({

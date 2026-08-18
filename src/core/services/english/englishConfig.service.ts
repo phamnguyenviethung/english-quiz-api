@@ -142,6 +142,10 @@ function applyRecordValue(raw: EnglishConfigSnapshot, def: EnglishConfigRecordDe
     raw.reading_refill_schedule = value as EnglishConfigSnapshot['reading_refill_schedule'];
     return;
   }
+  if (def.namespace === 'reading_question_refill_schedule' && def.path === 'items') {
+    raw.reading_question_refill_schedule = value as EnglishConfigSnapshot['reading_question_refill_schedule'];
+    return;
+  }
 
   const namespaceValue = raw[def.namespace];
   if (!isPlainObject(namespaceValue)) return;

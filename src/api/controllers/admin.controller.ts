@@ -12,6 +12,15 @@ import readingRefillService, {
   type ReadingBucketFilter
 } from '@/core/services/english/readingRefill.service';
 import readingPassageService, { type ReadingPassagesSort } from '@/core/services/english/readingPassage.service';
+import readingQuestionRefillService, {
+  readingQuestionBucketKeyOf,
+  type ReadingQuestionBucketFilter
+} from '@/core/services/english/readingQuestionRefill.service';
+import readingQuestionService, {
+  getQuestionsPerPassage,
+  type ReadingQuestionsSort,
+  type UpdateReadingQuestionInput
+} from '@/core/services/english/readingQuestion.service';
 import { ENG_LEVELS, QUIZ_TYPES, type EngLevel, type QuizType } from '@/core/services/english/questionTypes';
 import questionPoolService from '@/core/services/english/questionPool.service';
 import { BusinessLogicException } from '@/core/exceptions';
@@ -466,6 +475,197 @@ async function triggerReadingRefill(input: TriggerReadingRefillInput) {
   });
 }
 
+// ─── Reading questions ──────────────────────────────────────────────────────────
+
+interface ListReadingQuestionsQuery {
+  passageId?: number;
+  cefrLevel?: string;
+  topicId?: number;
+  withoutTopic?: boolean;
+  quizType?: string;
+  model?: string;
+  isActive?: boolean;
+  createdFrom?: string;
+  createdTo?: string;
+  q?: string;
+  sort?: ReadingQuestionsSort;
+  page?: number;
+  pageSize?: number;
+}
+
+function listReadingQuestions(query: ListReadingQuestionsQuery) {
+  return readingQuestionService.listQuestions(query);
+}
+
+async function getReadingQuestion(id: number) {
+  const found = await readingQuestionService.getById(id);
+  if (!found) throw new NotFoundException(`Không tìm thấy reading question: ${id}`);
+  return found;
+}
+
+function updateReadingQuestion(id: number, input: UpdateReadingQuestionInput) {
+  logger.info(`[Admin] Update reading question id=${id}`);
+  return readingQuestionService.updateQuestion(id, input);
+}
+
+async function deleteReadingQuestion(id: number) {
+  logger.info(`[Admin] Delete reading question id=${id}`);
+  await readingQuestionService.deleteQuestion(id);
+  return { id, deleted: true };
+}
+
+function listReadingQuestionModels() {
+  return readingQuestionService.listQuestionModels();
+}
+
+/** Sinh thử trọn bộ câu hỏi cho 1 bài để admin xem prompt/model cho ra gì — KHÔNG lưu. */
+async function generateReadingQuestions(input: { passageId: number; model?: string }) {
+  const passage = await readingPassageService.getById(input.passageId);
+  if (!passage) throw new NotFoundException(`Không tìm thấy reading passage: ${input.passageId}`);
+  if (!passage.topicName) {
+    throw new BusinessLogicException('Bài đọc không có topicName — prompt sinh câu hỏi cần thông tin này.');
+  }
+
+  const ctx = await studyService.buildReadingQuestionContext({ passage, model: input.model });
+  logger.info(`[Admin] Generate reading questions preview passageId=${passage.id} model=${ctx.model}`);
+
+  const count = getQuestionsPerPassage();
+  const { questions, attempts } = await studyService.generateReadingQuestionSet(ctx, { count });
+  if (questions.length === 0) {
+    const failed = attempts.find((attempt) => !attempt.ok);
+    throw new BusinessLogicException(
+      `Model không sinh đủ ${count} câu hỏi hợp lệ` +
+        (failed ? ` (hỏng ở loại "${failed.quizType}")` : '') +
+        '. Bài đọc có thể thiếu dẫn chứng cho loại câu hỏi đó. Thử lại hoặc đổi model.'
+    );
+  }
+
+  // Cộng token của tất cả các lần gọi — mỗi câu là một lần gọi riêng.
+  const usage = attempts.reduce<{ inputTokens: number; outputTokens: number; model: string } | undefined>(
+    (acc, attempt) => {
+      if (!attempt.usage) return acc;
+      if (!acc) return { ...attempt.usage };
+      return {
+        inputTokens: acc.inputTokens + attempt.usage.inputTokens,
+        outputTokens: acc.outputTokens + attempt.usage.outputTokens,
+        model: acc.model
+      };
+    },
+    undefined
+  );
+
+  return {
+    passage: {
+      id: passage.id,
+      title: passage.title,
+      cefrLevel: passage.cefrLevel,
+      topicName: passage.topicName
+    },
+    questions,
+    usage
+  };
+}
+
+interface ReadingQuestionBucketFilterInput {
+  cefrLevels?: string[];
+  topicIds?: number[];
+  passageIds?: number[];
+}
+
+function toReadingQuestionBucketFilter(
+  input: ReadingQuestionBucketFilterInput | undefined
+): ReadingQuestionBucketFilter | undefined {
+  if (!input) return undefined;
+
+  const invalidLevels = input.cefrLevels?.filter((level) => !ENG_LEVELS.includes(level as never)) ?? [];
+  if (invalidLevels.length > 0) throw new BusinessLogicException(`cefrLevel không hợp lệ: ${invalidLevels.join(', ')}`);
+
+  const invalidTopicIds = input.topicIds?.filter((id) => !Number.isInteger(id)) ?? [];
+  if (invalidTopicIds.length > 0)
+    throw new BusinessLogicException(`topicId không hợp lệ: ${invalidTopicIds.join(', ')}`);
+
+  const invalidPassageIds = input.passageIds?.filter((id) => !Number.isInteger(id)) ?? [];
+  if (invalidPassageIds.length > 0)
+    throw new BusinessLogicException(`passageId không hợp lệ: ${invalidPassageIds.join(', ')}`);
+
+  const filter: ReadingQuestionBucketFilter = {
+    cefrLevels: input.cefrLevels as EngLevel[] | undefined,
+    topicIds: input.topicIds,
+    passageIds: input.passageIds
+  };
+
+  const hasAny = Object.values(filter).some((values) => values !== undefined && values.length > 0);
+  return hasAny ? filter : undefined;
+}
+
+interface ListReadingQuestionBucketsQuery {
+  cefrLevels?: string;
+  topicIds?: string;
+  passageIds?: string;
+  scope?: 'all' | 'deficient';
+}
+
+/** Preview: bài nào sẽ được sinh câu hỏi với đúng bộ tham số này, và mỗi bài bao nhiêu câu. */
+async function listReadingQuestionBuckets(query: ListReadingQuestionBucketsQuery) {
+  const filter = toReadingQuestionBucketFilter({
+    cefrLevels: parseCsvParam(query.cefrLevels),
+    topicIds: parseCsvParam(query.topicIds)?.map((id) => Number(id)),
+    passageIds: parseCsvParam(query.passageIds)?.map((id) => Number(id))
+  });
+
+  const { matched, plan } = await readingQuestionRefillService.buildManualReadingQuestionRefillPlan({
+    scope: query.scope,
+    filter
+  });
+
+  const plannedByKey = new Map(plan.planned.map((item) => [readingQuestionBucketKeyOf(item.passageId), item.count]));
+
+  return {
+    buckets: matched.map((candidate) => ({
+      bucketKey: readingQuestionBucketKeyOf(candidate.passageId),
+      passageId: candidate.passageId,
+      title: candidate.title,
+      cefrLevel: candidate.cefrLevel,
+      topicId: candidate.topicId,
+      topicName: candidate.topicName,
+      currentCount: candidate.currentCount,
+      deficiency: candidate.deficiency,
+      plannedCount: plannedByKey.get(readingQuestionBucketKeyOf(candidate.passageId)) ?? 0
+    })),
+    summary: {
+      matchedPassages: matched.length,
+      plannedPassages: plan.planned.length,
+      plannedQuestions: plan.planned.reduce((sum, item) => sum + item.count, 0),
+      questionsPerPassage: getQuestionsPerPassage()
+    }
+  };
+}
+
+interface TriggerReadingQuestionRefillInput {
+  models?: string[];
+  scope?: 'all' | 'deficient';
+  filter?: ReadingQuestionBucketFilterInput;
+  bucketKeys?: string[];
+}
+
+async function triggerReadingQuestionRefill(input: TriggerReadingQuestionRefillInput) {
+  const models = await resolveStudyModels('reading', input.models);
+  const filter = toReadingQuestionBucketFilter(input.filter);
+
+  logger.info(
+    `[Admin] Manual reading question refill scope=${input.scope ?? 'deficient'} ` +
+      `models=${models.map((m) => m.model).join(',')} filter=${filter ? JSON.stringify(filter) : '-'} ` +
+      `selectedBuckets=${input.bucketKeys?.length ?? '-'}`
+  );
+
+  return readingQuestionRefillService.runManualReadingQuestionRefill({
+    models,
+    scope: input.scope,
+    filter,
+    bucketKeys: input.bucketKeys
+  });
+}
+
 export default {
   listTenants,
   getTenant,
@@ -494,5 +694,13 @@ export default {
   listReadingModels,
   generateReadingPassage,
   listReadingBuckets,
-  triggerReadingRefill
+  triggerReadingRefill,
+  listReadingQuestions,
+  getReadingQuestion,
+  updateReadingQuestion,
+  deleteReadingQuestion,
+  listReadingQuestionModels,
+  generateReadingQuestions,
+  listReadingQuestionBuckets,
+  triggerReadingQuestionRefill
 };

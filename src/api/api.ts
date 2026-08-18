@@ -12,6 +12,7 @@ import { adminRoute } from './routes/admin.route';
 import { questionGenQueue } from '@/core/cron/question-gen.job';
 import { poolRefillQueue } from '@/core/cron/pool-refill.job';
 import { readingRefillQueue } from '@/core/cron/reading-gen.job';
+import { readingQuestionRefillQueue } from '@/core/cron/reading-question-gen.job';
 import { z } from 'zod';
 import { t } from 'elysia';
 import { ApiOk, ApiErrorSchema } from './common/responseSchemas';
@@ -28,7 +29,8 @@ export async function startApi(): Promise<void> {
     queues: [
       new BullMQAdapter(questionGenQueue),
       new BullMQAdapter(poolRefillQueue),
-      new BullMQAdapter(readingRefillQueue)
+      new BullMQAdapter(readingRefillQueue),
+      new BullMQAdapter(readingQuestionRefillQueue)
     ],
     serverAdapter
   });
@@ -95,12 +97,20 @@ export async function startApi(): Promise<void> {
               name: 'Admin / Pool',
               description: 'Refill thủ công toàn bộ question pool. Yêu cầu tài khoản admin.'
             },
+            {
+              name: 'Admin / Reading Questions',
+              description: 'Kho câu hỏi đọc hiểu sinh từ reading passage + refill thủ công. Yêu cầu tài khoản admin.'
+            },
             { name: 'English / Meta', description: 'Metadata tĩnh (danh sách quiz type).' },
             {
               name: 'English / Generation',
               description: 'Sinh câu hỏi on-demand bằng LLM (theo quizType + reading).'
             },
             { name: 'English / Question Pool', description: 'Pop/count/fill/pick câu hỏi trong pool.' },
+            {
+              name: 'English / Readings',
+              description: 'Lấy bài đọc kèm bộ câu hỏi đọc hiểu đã sinh sẵn.'
+            },
             {
               name: 'English / Config',
               description: 'Config runtime của English (pool size, distribution, job flags).'

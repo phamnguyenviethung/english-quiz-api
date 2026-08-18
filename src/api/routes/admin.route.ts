@@ -19,7 +19,12 @@ import {
   ReadingPassagePageSchema,
   ReadingPassageModelStatSchema,
   ReadingBucketPreviewSchema,
-  GeneratedReadingPassageSchema
+  GeneratedReadingPassageSchema,
+  ReadingQuestionRecordSchema,
+  ReadingQuestionPageSchema,
+  ReadingQuestionModelStatSchema,
+  ReadingQuestionBucketPreviewSchema,
+  GeneratedReadingQuestionsSchema
 } from '@/api/common/responseSchemas';
 import { adminAuthPlugin } from '@/api/plugins/adminAuth.plugin';
 import adminController from '@/api/controllers/admin.controller';
@@ -700,6 +705,212 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       description:
         `Xoá hẳn bài đọc khỏi kho. Muốn giữ lại để tra cứu thì dùng PATCH với { isActive: false } thay vì xoá. ` +
         `${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Object({ id: t.Number(), deleted: t.Boolean() })),
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+
+  // ── Reading questions ───────────────────────────────────────────────────────
+  .get('/reading-questions', async ({ query }) => ok(await adminController.listReadingQuestions(query)), {
+    query: t.Object({
+      passageId: t.Optional(t.Numeric({ description: 'Chỉ lấy câu hỏi của 1 bài đọc.' })),
+      cefrLevel: t.Optional(EngLevelSchema),
+      topicId: t.Optional(t.Numeric()),
+      withoutTopic: t.Optional(t.BooleanString({ description: 'true = chỉ câu không gắn topic. Thắng `topicId`.' })),
+      quizType: t.Optional(t.String({ description: 'detail / inference / vocabulary_context / ...' })),
+      model: t.Optional(t.String()),
+      isActive: t.Optional(t.BooleanString()),
+      createdFrom: t.Optional(t.String({ format: 'date-time' })),
+      createdTo: t.Optional(t.String({ format: 'date-time' })),
+      q: t.Optional(t.String({ maxLength: 100, description: 'ILIKE trên question, options, explanation, model.' })),
+      sort: t.Optional(
+        t.Union([
+          t.Literal('id_asc'),
+          t.Literal('id_desc'),
+          t.Literal('created_asc'),
+          t.Literal('created_desc'),
+          t.Literal('passage_asc'),
+          t.Literal('passage_desc')
+        ])
+      ),
+      page: t.Optional(t.Numeric({ minimum: 1 })),
+      pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100 }))
+    }),
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'List reading questions',
+      description: `Kho câu hỏi đọc hiểu sinh từ reading passage, có filter + phân trang. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(ReadingQuestionPageSchema),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  // Segment tĩnh phải khai trước '/reading-questions/:id'.
+  .get('/reading-questions/models', async () => list(await adminController.listReadingQuestionModels()), {
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'List distinct models in reading question store',
+      description: `Model đang có câu hỏi trong kho kèm số lượng. Dùng đổ dropdown filter. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiList(ReadingQuestionModelStatSchema),
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/reading-questions/buckets', async ({ query }) => ok(await adminController.listReadingQuestionBuckets(query)), {
+    query: t.Object({
+      cefrLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`.' })),
+      topicIds: t.Optional(t.String({ description: 'CSV topic id, vd `3,7,12`.' })),
+      passageIds: t.Optional(t.String({ description: 'CSV passage id — chốt đúng vài bài cụ thể.' })),
+      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')]))
+    }),
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'Preview passages needing questions',
+      description:
+        'Liệt kê bài đọc khớp filter kèm số câu đang có và số câu sẽ sinh. **Bucket ở pipeline này là MỘT BÀI ĐỌC** ' +
+        '(`bucketKey = rq:{passageId}`), khác bucket (cefrLevel × topic) của /admin/readings/buckets. Chạy chung ' +
+        'hàm plan với endpoint refill nên `summary.plannedPassages` bằng đúng `totalBuckets` mà refill trả về. ' +
+        'Bài đã đủ câu có `plannedCount = 0`. Bài vượt `reading_question.maxGenerationAttempts` bị loại khỏi danh ' +
+        `sách. Chỉ đọc, không tốn chi phí LLM. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(ReadingQuestionBucketPreviewSchema),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .post('/reading-questions/generate', async ({ body }) => ok(await adminController.generateReadingQuestions(body)), {
+    body: t.Object({
+      passageId: t.Integer({ description: 'Bài đọc nguồn. Phải đang tồn tại và có topicName.' }),
+      model: t.Optional(
+        t.String({ description: 'OpenRouter model id. Bỏ trống → random trong pool `readingEnabled`.' })
+      )
+    }),
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'Generate questions from a passage (preview only)',
+      description:
+        'Sinh thử trọn bộ `reading_question.questionsPerPassage` câu để kiểm tra prompt/model. **KHÔNG lưu** — ' +
+        'dùng POST /admin/reading-questions/refill nếu muốn sinh và lưu. Quy tắc bám theo ' +
+        'question-generator-guideline.md: quizType bị giới hạn theo CEFR level của bài, 4 đáp án, đúng 1 đáp án ' +
+        'đúng, explanation tiếng Việt. **All-or-nothing** — thiếu dù 1 câu hợp lệ là trả 400 chứ không trả bộ ' +
+        `thiếu, vì tính độc lập/đa dạng là thuộc tính của cả bộ. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(GeneratedReadingQuestionsSchema),
+      400: ApiErrorSchema,
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .post('/reading-questions/refill', async ({ body }) => ok(await adminController.triggerReadingQuestionRefill(body)), {
+    body: t.Object({
+      models: t.Optional(
+        t.Array(t.String(), {
+          description:
+            'Danh sách OpenRouter model id. Mỗi bài chọn ngẫu nhiên 1 model. Bỏ trống → random trong mọi model ' +
+            'đang bật `readingEnabled`. Model không tồn tại hoặc đang tắt trả 400.'
+        })
+      ),
+      scope: t.Optional(
+        t.Union([t.Literal('all'), t.Literal('deficient')], {
+          description: 'Mặc định `deficient` — chỉ bài còn thiếu câu. `all` bỏ qua điều kiện thiếu.'
+        })
+      ),
+      filter: t.Optional(
+        t.Object(
+          {
+            cefrLevels: t.Optional(t.Array(EngLevelSchema)),
+            topicIds: t.Optional(t.Array(t.Integer())),
+            passageIds: t.Optional(t.Array(t.Integer()))
+          },
+          { description: 'Thu hẹp danh sách bài. Chiều nào bỏ trống thì không lọc theo chiều đó.' }
+        )
+      ),
+      bucketKeys: t.Optional(
+        t.Array(t.String(), {
+          description: 'Chốt đúng danh sách bucketKey `rq:{passageId}` (lấy từ GET /reading-questions/buckets).'
+        })
+      )
+    }),
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'Trigger reading question generation',
+      description:
+        'Sinh câu hỏi cho các bài đọc còn thiếu. Chạy in-process (không qua BullMQ), bounded concurrency theo ' +
+        '`reading_question.manualFillConcurrency`. Bỏ qua `job_flags.readingQuestionRefillMaxPerRun` — đây là ' +
+        'hành động admin chủ động. Số câu mỗi bài luôn là `reading_question.questionsPerPassage`, không chọn được ' +
+        'từng lần. Trả ngay `{ runId, totalBuckets }`, theo dõi qua GET /english/cron/runs/:runId. ' +
+        `${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Object({ runId: t.Nullable(t.String()), totalBuckets: t.Number() })),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/reading-questions/:id', async ({ params }) => ok(await adminController.getReadingQuestion(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'Get reading question by id',
+      description: `Chi tiết 1 câu hỏi đọc hiểu. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(ReadingQuestionRecordSchema),
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .patch(
+    '/reading-questions/:id',
+    async ({ params, body }) => ok(await adminController.updateReadingQuestion(params.id, body)),
+    {
+      params: IdParam,
+      body: t.Object({
+        question: t.Optional(t.String({ minLength: 1 })),
+        options: t.Optional(t.Array(t.String(), { description: 'Replace toàn bộ. Phải đúng 4 đáp án không rỗng.' })),
+        correctAnswer: t.Optional(t.Integer({ minimum: 0, description: 'Index 0-based, validate theo options mới.' })),
+        explanation: t.Optional(t.String({ minLength: 1 })),
+        isActive: t.Optional(t.Boolean({ description: 'false = tắt câu, bài sẽ bị coi là thiếu và được sinh lại.' }))
+      }),
+      detail: {
+        tags: ['Admin / Reading Questions'],
+        summary: 'Update reading question',
+        description:
+          'Partial update. Sửa `options` thì `correctAnswer` được validate lại theo bộ options MỚI, không phải ' +
+          `bộ cũ. ${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(ReadingQuestionRecordSchema),
+        400: ApiErrorSchema,
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
+  .delete('/reading-questions/:id', async ({ params }) => ok(await adminController.deleteReadingQuestion(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Reading Questions'],
+      summary: 'Delete reading question',
+      description:
+        'Xoá hẳn. Muốn giữ để tra cứu thì PATCH { isActive: false }. Lưu ý: xoá/tắt câu làm bài đọc trở thành ' +
+        `"thiếu câu" và sẽ được cron sinh bù. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },
     response: {

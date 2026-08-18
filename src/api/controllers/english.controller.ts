@@ -21,6 +21,7 @@ import questionPoolService, {
   type ListPoolQuestionsInput
 } from '@/core/services/english/questionPool.service';
 import questionPoolTriggerService from '@/core/services/english/questionPoolTrigger.service';
+import readingQuestionService from '@/core/services/english/readingQuestion.service';
 import topicService from '@/core/services/english/topic.service';
 import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
 import {
@@ -228,9 +229,49 @@ function getCronUsage(input: CronUsageInput) {
   return englishCronJobTrackingService.getUsageAnalytics({ from, to, groupBy: input.groupBy ?? 'day' });
 }
 
+// ─── Reading (bài đọc + câu hỏi) ──────────────────────────────────────────────
+
+/**
+ * Bài đọc luôn gắn 1 topic (không có bucket no-topic như question pool), nên khi client
+ * không chỉ định topicId thì "mọi topic" phải được bó theo allow-list của tenant —
+ * assertTopicAllowed(tenant, null) một mình không đủ để chặn.
+ */
+function resolveAllowedTopicIds(tenant: TenantContext): number[] | null {
+  return tenant.allowAllTopics ? null : tenant.allowedTopicIds;
+}
+
+async function popReading(
+  tenant: TenantContext,
+  input: { cefrLevel?: EngLevel; topicId?: number; excludeIds: number[] }
+) {
+  if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
+
+  const result = await readingQuestionService.popPassageWithQuestions({
+    cefrLevel: input.cefrLevel,
+    topicId: input.topicId,
+    excludeIds: input.excludeIds,
+    allowedTopicIds: resolveAllowedTopicIds(tenant)
+  });
+  if (!result) throw new NotFoundException('Không có bài đọc nào đã sẵn sàng (đủ câu hỏi) cho bucket này');
+  return result;
+}
+
+async function countReadings(tenant: TenantContext, input: { cefrLevel?: EngLevel; topicId?: number }) {
+  if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
+
+  const count = await readingQuestionService.countReadyPassages({
+    cefrLevel: input.cefrLevel,
+    topicId: input.topicId,
+    allowedTopicIds: resolveAllowedTopicIds(tenant)
+  });
+  return { cefrLevel: input.cefrLevel ?? null, topicId: input.topicId ?? null, count };
+}
+
 export default {
   generate,
   generateReading,
+  popReading,
+  countReadings,
   parseExcludeIds,
   popFromPool,
   countPool,

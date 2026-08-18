@@ -58,6 +58,7 @@ const CronScheduleSchema = z
 
 export const PoolRefillScheduleSchema = CronScheduleSchema;
 export const ReadingRefillScheduleSchema = CronScheduleSchema;
+export const ReadingQuestionRefillScheduleSchema = CronScheduleSchema;
 
 export const ReadingPassageSchema = z
   .object({
@@ -69,6 +70,27 @@ export const ReadingPassageSchema = z
     manualFillDefaultCount: positiveIntSchema,
     manualFillConcurrency: positiveIntSchema,
     excludeRecentTitleCount: nonNegativeIntSchema
+  })
+  .refine((value) => value.manualFillMinCount <= value.manualFillDefaultCount, {
+    message: 'manualFillDefaultCount must be >= manualFillMinCount'
+  })
+  .refine((value) => value.manualFillDefaultCount <= value.manualFillMaxCount, {
+    message: 'manualFillDefaultCount must be <= manualFillMaxCount'
+  });
+
+// Batch schema của LLM cap ở 5 item (ReadingQuestionBatchSchema), nên chặn ngay từ
+// config: đặt questionsPerPassage > 5 sẽ làm cả lần gọi model fail Zod.
+const readingQuestionBatchLimit = z.number().int().min(1).max(5);
+
+export const ReadingQuestionSchema = z
+  .object({
+    questionsPerPassage: readingQuestionBatchLimit,
+    perPassageGenerationCap: readingQuestionBatchLimit,
+    maxGenerationAttempts: nonNegativeIntSchema,
+    manualFillMinCount: positiveIntSchema,
+    manualFillMaxCount: positiveIntSchema,
+    manualFillDefaultCount: positiveIntSchema,
+    manualFillConcurrency: positiveIntSchema
   })
   .refine((value) => value.manualFillMinCount <= value.manualFillDefaultCount, {
     message: 'manualFillDefaultCount must be >= manualFillMinCount'
@@ -95,7 +117,9 @@ export const JobFlagsSchema = z.object({
   poolRefillEnabled: z.boolean(),
   poolRefillMaxQuestionsPerRun: positiveIntSchema,
   readingRefillEnabled: z.boolean(),
-  readingRefillMaxPerRun: positiveIntSchema
+  readingRefillMaxPerRun: positiveIntSchema,
+  readingQuestionRefillEnabled: z.boolean(),
+  readingQuestionRefillMaxPerRun: positiveIntSchema
 });
 
 export const EnglishConfigSchemas = {
@@ -104,7 +128,9 @@ export const EnglishConfigSchemas = {
   job_flags: JobFlagsSchema,
   pool_refill_schedule: PoolRefillScheduleSchema,
   reading_passage: ReadingPassageSchema,
-  reading_refill_schedule: ReadingRefillScheduleSchema
+  reading_refill_schedule: ReadingRefillScheduleSchema,
+  reading_question: ReadingQuestionSchema,
+  reading_question_refill_schedule: ReadingQuestionRefillScheduleSchema
 } as const;
 
 export const EnglishConfigDefaults = {
@@ -135,7 +161,10 @@ export const EnglishConfigDefaults = {
     poolRefillEnabled: true,
     poolRefillMaxQuestionsPerRun: 50,
     readingRefillEnabled: true,
-    readingRefillMaxPerRun: 20
+    readingRefillMaxPerRun: 20,
+    readingQuestionRefillEnabled: true,
+    // Đơn vị là CÂU HỎI, không phải bài đọc — mỗi bài ăn 3 câu.
+    readingQuestionRefillMaxPerRun: 60
   },
   pool_refill_schedule: [
     { name: 'pool-refill-morning', cron: '0 5 * * *' },
@@ -153,7 +182,19 @@ export const EnglishConfigDefaults = {
     // Số title gần nhất trong cùng bucket đưa vào prompt để model không lặp plot.
     excludeRecentTitleCount: 15
   },
-  reading_refill_schedule: [{ name: 'reading-refill-daily', cron: '0 6 * * *' }]
+  reading_refill_schedule: [{ name: 'reading-refill-daily', cron: '0 6 * * *' }],
+  reading_question: {
+    questionsPerPassage: 3,
+    perPassageGenerationCap: 3,
+    // Bài quá mỏng sẽ hỏng mãi — quá ngưỡng này thì scan bỏ qua hẳn, khỏi đốt token.
+    maxGenerationAttempts: 3,
+    manualFillMinCount: 1,
+    manualFillMaxCount: 50,
+    manualFillDefaultCount: 10,
+    manualFillConcurrency: 2
+  },
+  // Chạy 30 phút sau reading-refill-daily để bài sinh sáng nay có câu hỏi ngay trong buổi sáng.
+  reading_question_refill_schedule: [{ name: 'reading-question-refill-daily', cron: '30 6 * * *' }]
 } as const;
 
 export type EnglishConfigKey = keyof typeof EnglishConfigDefaults;
@@ -161,6 +202,7 @@ export type QuestionPoolConfig = z.infer<typeof QuestionPoolSchema>;
 export type QuizDistributionConfig = z.infer<typeof QuizDistributionSchema>;
 export type JobFlagsConfig = z.infer<typeof JobFlagsSchema>;
 export type ReadingPassageConfig = z.infer<typeof ReadingPassageSchema>;
+export type ReadingQuestionConfig = z.infer<typeof ReadingQuestionSchema>;
 export type EnglishConfigSnapshot = {
   [K in EnglishConfigKey]: z.infer<(typeof EnglishConfigSchemas)[K]>;
 };
@@ -332,6 +374,36 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
     sortOrder: 650
   },
   {
+    recordKey: 'job_flags.readingQuestionRefillEnabled',
+    namespace: 'job_flags',
+    path: 'readingQuestionRefillEnabled',
+    category: 'jobs',
+    label: 'Bật Reading-Question-Refill (scheduled)',
+    description:
+      'Tắt sẽ bỏ qua các lần sinh câu hỏi đọc hiểu tự động theo lịch ' +
+      '(xem reading_question_refill_schedule.items).',
+    recordType: 'boolean',
+    defaultValue: EnglishConfigDefaults.job_flags.readingQuestionRefillEnabled,
+    validation: { type: 'boolean', label: 'Bật Reading-Question-Refill (scheduled)' },
+    uiSchema: { type: 'boolean', label: 'Bật Reading-Question-Refill (scheduled)' },
+    sortOrder: 660
+  },
+  {
+    recordKey: 'job_flags.readingQuestionRefillMaxPerRun',
+    namespace: 'job_flags',
+    path: 'readingQuestionRefillMaxPerRun',
+    category: 'jobs',
+    label: 'Max câu hỏi / 1 lần Reading-Question-Refill',
+    description:
+      'Giới hạn tổng số câu hỏi đọc hiểu sinh trong mỗi lần chạy (tối ưu cost AI). ' +
+      'Mỗi bài đọc ăn questionsPerPassage câu.',
+    recordType: 'num',
+    defaultValue: EnglishConfigDefaults.job_flags.readingQuestionRefillMaxPerRun,
+    validation: intField('Max câu hỏi / 1 lần Reading-Question-Refill', 1),
+    uiSchema: intField('Max câu hỏi / 1 lần Reading-Question-Refill', 1),
+    sortOrder: 670
+  },
+  {
     recordKey: 'pool_refill_schedule.items',
     namespace: 'pool_refill_schedule',
     path: 'items',
@@ -404,6 +476,51 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
       }
     },
     sortOrder: 800
+  },
+  ...Object.entries(EnglishConfigDefaults.reading_question).map(([path, defaultValue], index) => {
+    const schema = intField(path, path === 'maxGenerationAttempts' ? 0 : 1);
+    return {
+      recordKey: `reading_question.${path}`,
+      namespace: 'reading_question' as const,
+      path,
+      category: 'reading',
+      label: path,
+      description: 'English reading question setting.',
+      recordType: 'num' as const,
+      defaultValue,
+      validation: schema,
+      uiSchema: schema,
+      sortOrder: 900 + index * 10
+    };
+  }),
+  {
+    recordKey: 'reading_question_refill_schedule.items',
+    namespace: 'reading_question_refill_schedule',
+    path: 'items',
+    category: 'reading',
+    label: 'Lịch chạy Reading-Question-Refill (cron)',
+    description:
+      'Danh sách các mốc giờ chạy scheduled reading-question-refill. Đổi giá trị này sẽ reconcile lại ' +
+      'BullMQ job schedulers ngay lập tức (thêm/xoá scheduler), không cần restart.',
+    recordType: 'arr',
+    defaultValue: EnglishConfigDefaults.reading_question_refill_schedule,
+    validation: {
+      type: 'arr',
+      label: 'Reading Question Refill Schedule',
+      itemFields: {
+        name: { type: 'str', label: 'Tên scheduler' },
+        cron: { type: 'str', label: 'Cron expression' }
+      }
+    },
+    uiSchema: {
+      type: 'arr',
+      label: 'Reading Question Refill Schedule',
+      itemFields: {
+        name: { type: 'str', label: 'Tên scheduler' },
+        cron: { type: 'str', label: 'Cron expression' }
+      }
+    },
+    sortOrder: 950
   }
 ];
 
@@ -414,6 +531,10 @@ export function buildDefaultEnglishConfigSnapshot(): EnglishConfigSnapshot {
     job_flags: JobFlagsSchema.parse(EnglishConfigDefaults.job_flags),
     pool_refill_schedule: PoolRefillScheduleSchema.parse(EnglishConfigDefaults.pool_refill_schedule),
     reading_passage: ReadingPassageSchema.parse(EnglishConfigDefaults.reading_passage),
-    reading_refill_schedule: ReadingRefillScheduleSchema.parse(EnglishConfigDefaults.reading_refill_schedule)
+    reading_refill_schedule: ReadingRefillScheduleSchema.parse(EnglishConfigDefaults.reading_refill_schedule),
+    reading_question: ReadingQuestionSchema.parse(EnglishConfigDefaults.reading_question),
+    reading_question_refill_schedule: ReadingQuestionRefillScheduleSchema.parse(
+      EnglishConfigDefaults.reading_question_refill_schedule
+    )
   };
 }

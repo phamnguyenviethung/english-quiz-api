@@ -14,12 +14,16 @@ Mỗi row trong `english_config_records` là một setting riêng:
 - `recordType`: lấy từ bảng `english_config_record_types`
 - typed value columns: `valueText`, `valueNumber`, `valueBoolean`, `valueJson`
 
-Config hiện phục vụ **4 namespace**:
+Config hiện phục vụ **8 namespace**:
 
 - Question pool (`question_pool`) — cap/threshold pool + manual-fill
 - Quiz distribution (`quiz_distribution`) — weighted quiz type
-- Job flags (`job_flags`) — bật/tắt cron job gen + limit câu mỗi lần refill
+- Job flags (`job_flags`) — bật/tắt cron job gen + limit mỗi lần refill
 - Pool refill schedule (`pool_refill_schedule`) — lịch chạy cron của scheduled pool-refill
+- Reading passage (`reading_passage`) — cap/threshold kho bài đọc + manual-fill
+- Reading refill schedule (`reading_refill_schedule`) — lịch chạy cron sinh bài đọc
+- Reading question (`reading_question`) — số câu mỗi bài + manual-fill + trần số lần sinh hỏng
+- Reading question refill schedule (`reading_question_refill_schedule`) — lịch chạy cron sinh câu hỏi
 
 Prompt text, prompt examples, và Zod question schemas không thuộc config.
 
@@ -56,7 +60,7 @@ Seed các type cơ bản:
 | `recordKey`              | Unique key, ví dụ `question_pool.maxPerBucket`                |
 | `namespace`              | Runtime snapshot group, ví dụ `question_pool`                 |
 | `path`                   | Field path trong namespace, ví dụ `maxPerBucket` hoặc `items` |
-| `category`               | Nhóm hiển thị: `pool`, `jobs`                                 |
+| `category`               | Nhóm hiển thị: `pool`, `jobs`, `reading`                      |
 | `label`, `description`   | Text hiển thị cho admin                                       |
 | `recordTypeId`           | FK đến `english_config_record_types.id`                       |
 | `valueText`              | Current value cho `str`                                       |
@@ -129,6 +133,21 @@ Record:
 Mỗi item có `name` (unique, dùng làm BullMQ `jobSchedulerId`) và `cron` (cron expression, validate bằng `cron-parser` ngay ở Zod schema — sai cú pháp → 400 khi PATCH). Đổi giá trị này reconcile BullMQ job schedulers ngay lập tức, không cần restart (xem §1).
 
 Manual-fill (`/admin/pool/refill`) không có flag chặn — chủ động trigger, yêu cầu tài khoản admin nên không cần feature flag.
+
+### `reading_passage` / `reading_refill_schedule`
+
+Kho bài đọc. Chi tiết từng key ở [`reading-passage.md`](./reading-passage.md).
+
+### `reading_question` / `reading_question_refill_schedule`
+
+Câu hỏi đọc hiểu sinh từ bài đọc. Chi tiết từng key ở [`reading-question.md`](./reading-question.md).
+
+Hai key đáng chú ý:
+
+- `reading_question.questionsPerPassage` và `.perPassageGenerationCap` bị chặn `max 5` ngay ở Zod schema, vì batch schema của LLM cap `.max(5)` — đặt lớn hơn sẽ làm cả lần gọi model fail validation. `reading_passage.perBucketGenerationCap` **chưa** có ràng buộc này (bẫy còn tồn tại).
+- `job_flags.readingQuestionRefillMaxPerRun` tính theo **câu hỏi**, không phải bài đọc — mỗi bài ăn `questionsPerPassage` câu.
+
+Ba namespace có `path: 'items'` (`pool_refill_schedule`, `reading_refill_schedule`, `reading_question_refill_schedule`) cần thêm nhánh riêng trong `applyRecordValue()` ở `englishConfig.service.ts` — namespace dạng mảng không đi qua `assignPath()` được.
 
 ## 6. API
 
