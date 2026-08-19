@@ -28,7 +28,9 @@ import {
   getEnglishConfigSnapshot,
   getAllEnglishConfigRows,
   updateEnglishConfig,
-  resetEnglishConfigToDefault
+  updateEnglishConfigBulk,
+  resetEnglishConfigToDefault,
+  type EnglishConfigChange
 } from '@/core/services/english/englishConfig.service';
 import { QUIZ_TYPES, type EngLevel, type QuizType } from '@/core/services/english/questionTypes';
 
@@ -181,6 +183,10 @@ function updateConfig(recordKey: string, value: unknown) {
   return updateEnglishConfig(recordKey, value);
 }
 
+function updateConfigBulk(changes: EnglishConfigChange[]) {
+  return updateEnglishConfigBulk(changes);
+}
+
 function resetConfig(recordKey: string) {
   return resetEnglishConfigToDefault(recordKey);
 }
@@ -283,6 +289,7 @@ export default {
   getConfigSnapshot,
   getConfigRecords,
   updateConfig,
+  updateConfigBulk,
   resetConfig,
   listTopics,
   randomTopicPairs,

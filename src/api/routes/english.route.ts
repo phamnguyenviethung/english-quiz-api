@@ -311,6 +311,35 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       ...COMMON_ERRORS
     }
   })
+  // Phải khai TRƯỚC '/config/:recordKey', nếu không '/records' sẽ bị match làm recordKey.
+  .patch('/config/records', async ({ body }) => ok(await englishController.updateConfigBulk(body.changes)), {
+    auth: { admin: true },
+    body: t.Object({
+      changes: t.Array(
+        t.Object({
+          recordKey: t.String(),
+          value: t.Unknown({ description: 'Shape phụ thuộc recordType của recordKey tương ứng.' })
+        }),
+        { minItems: 1, description: 'Danh sách thay đổi, không được trùng recordKey.' }
+      )
+    }),
+    detail: {
+      tags: ['English / Config'],
+      summary: 'Update multiple config records',
+      description:
+        'Cập nhật nhiều config record trong 1 transaction: áp hết thay đổi rồi mới validate snapshot một lần. ' +
+        'Dùng khi sửa các field ràng buộc lẫn nhau (vd manualFillMinCount + manualFillDefaultCount) — ' +
+        'gọi PATCH lần lượt sẽ fail ở request đầu. Sai 1 record thì rollback toàn bộ. ' +
+        'Chỉ dùng được với tài khoản admin.',
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Array(EnglishConfigRecordViewSchema)),
+      400: ApiErrorSchema,
+      403: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
   .patch(
     '/config/:recordKey',
     async ({ params, body }) => ok(await englishController.updateConfig(params.recordKey, body.value)),

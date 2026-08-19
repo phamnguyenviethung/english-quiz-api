@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { BusinessLogicException } from '@/core/exceptions';
@@ -158,7 +158,7 @@ function parseSnapshotNamespace(namespace: EnglishConfigKey, value: unknown): En
 
 function buildSnapshotFromRows(
   rows: EnglishConfigRecordView[],
-  strictNamespace?: EnglishConfigKey
+  strictNamespaces?: ReadonlySet<EnglishConfigKey>
 ): EnglishConfigSnapshot {
   const next = buildDefaultEnglishConfigSnapshot();
 
@@ -170,7 +170,7 @@ function buildSnapshotFromRows(
       const value = validateBasicValue(row.recordType, row.value, def.validation);
       applyRecordValue(next, def, value);
     } catch (err) {
-      if (strictNamespace === def.namespace) throw err;
+      if (strictNamespaces?.has(def.namespace)) throw err;
       logger.warn(`[EnglishConfig] Invalid DB value for recordKey=${row.recordKey}, using default. err=${err}`);
     }
   }
@@ -179,7 +179,7 @@ function buildSnapshotFromRows(
     try {
       next[key] = parseSnapshotNamespace(key, next[key]) as never;
     } catch (err) {
-      if (strictNamespace === key) throw err;
+      if (strictNamespaces?.has(key)) throw err;
       logger.warn(`[EnglishConfig] Invalid DB snapshot namespace=${key}, using default. err=${err}`);
       next[key] = buildDefaultEnglishConfigSnapshot()[key] as never;
     }
@@ -336,20 +336,46 @@ export function parseEnglishConfigValue(recordKey: string, value: unknown): unkn
   }
 }
 
-export async function updateEnglishConfig(recordKey: string, value: unknown): Promise<EnglishConfigRecordView> {
-  const def = definitionByRecordKey.get(recordKey);
-  if (!def) throw new BusinessLogicException(`Unknown English config record key: ${recordKey}`);
+export interface EnglishConfigChange {
+  recordKey: string;
+  value: unknown;
+}
 
-  const parsedValue = parseEnglishConfigValue(recordKey, value);
+/**
+ * Áp tất cả thay đổi vào snapshot rồi mới validate MỘT lần, trong cùng transaction.
+ * Bắt buộc phải như vậy với các ràng buộc chéo kiểu `manualFillMinCount <= manualFillDefaultCount`:
+ * sửa lần lượt từng record sẽ fail ở request đầu dù trạng thái cuối cùng hợp lệ.
+ */
+export async function updateEnglishConfigBulk(changes: EnglishConfigChange[]): Promise<EnglishConfigRecordView[]> {
+  if (changes.length === 0) throw new BusinessLogicException('No English config change provided');
+
+  const seen = new Set<string>();
+  const resolved = changes.map(({ recordKey, value }) => {
+    const def = definitionByRecordKey.get(recordKey);
+    if (!def) throw new BusinessLogicException(`Unknown English config record key: ${recordKey}`);
+    if (seen.has(recordKey)) throw new BusinessLogicException(`Duplicate English config record key: ${recordKey}`);
+    seen.add(recordKey);
+    return { def, parsedValue: parseEnglishConfigValue(recordKey, value) };
+  });
+
+  const changeByRecordKey = new Map(resolved.map((item) => [item.def.recordKey, item]));
+  const touchedNamespaces = new Set(resolved.map((item) => item.def.namespace));
+  const recordKeys = resolved.map((item) => item.def.recordKey);
 
   const updated = await db.transaction(async (tx) => {
-    const [row] = await tx
+    // orderBy(id) để mọi transaction khoá theo cùng thứ tự, tránh deadlock khi 2 request
+    // bulk chạm cùng tập record theo thứ tự khác nhau.
+    const lockedRows = await tx
       .select()
       .from(englishConfigRecord)
-      .where(eq(englishConfigRecord.recordKey, recordKey))
-      .limit(1)
+      .where(inArray(englishConfigRecord.recordKey, recordKeys))
+      .orderBy(asc(englishConfigRecord.id))
       .for('update');
-    if (!row) throw new Error(`English config record not found: ${recordKey}`);
+    if (lockedRows.length !== recordKeys.length) {
+      const found = new Set(lockedRows.map((row) => row.recordKey));
+      const missing = recordKeys.filter((key) => !found.has(key));
+      throw new Error(`English config record not found: ${missing.join(', ')}`);
+    }
 
     const rows = await tx.select().from(englishConfigRecord);
     const typeRows = await tx.select().from(englishConfigRecordType);
@@ -358,13 +384,13 @@ export async function updateEnglishConfig(recordKey: string, value: unknown): Pr
       const recordType = typeById.get(candidate.recordTypeId);
       if (!recordType) throw new Error(`Missing English config record type id=${candidate.recordTypeId}`);
       assertRecordType(recordType);
-      const nextCandidate =
-        candidate.id === row.id
-          ? ({
-              ...candidate,
-              ...valueColumnsForType(def.recordType, parsedValue, 'value')
-            } as EnglishConfigRecord)
-          : candidate;
+      const change = changeByRecordKey.get(candidate.recordKey);
+      const nextCandidate = change
+        ? ({
+            ...candidate,
+            ...valueColumnsForType(change.def.recordType, change.parsedValue, 'value')
+          } as EnglishConfigRecord)
+        : candidate;
       return {
         ...nextCandidate,
         recordType,
@@ -374,25 +400,41 @@ export async function updateEnglishConfig(recordKey: string, value: unknown): Pr
     });
 
     try {
-      buildSnapshotFromRows(nextRows, def.namespace);
+      buildSnapshotFromRows(nextRows, touchedNamespaces);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new BusinessLogicException(`Invalid value for ${recordKey}: ${message}`);
+      throw new BusinessLogicException(`Invalid value for ${recordKeys.join(', ')}: ${message}`);
     }
 
-    const [nextRow] = await tx
-      .update(englishConfigRecord)
-      .set({ ...valueColumnsForType(def.recordType, parsedValue, 'value'), updatedAt: new Date() })
-      .where(eq(englishConfigRecord.id, row.id))
-      .returning();
-    if (!nextRow) throw new Error(`Failed to update English config record: ${recordKey}`);
-    return nextRow;
+    const nextRowByKey = new Map<string, EnglishConfigRecord>();
+    for (const { def, parsedValue } of resolved) {
+      const [nextRow] = await tx
+        .update(englishConfigRecord)
+        .set({ ...valueColumnsForType(def.recordType, parsedValue, 'value'), updatedAt: new Date() })
+        .where(eq(englishConfigRecord.recordKey, def.recordKey))
+        .returning();
+      if (!nextRow) throw new Error(`Failed to update English config record: ${def.recordKey}`);
+      nextRowByKey.set(def.recordKey, nextRow);
+    }
+
+    return recordKeys.map((key) => {
+      const row = nextRowByKey.get(key);
+      if (!row) throw new Error(`Failed to update English config record: ${key}`);
+      return row;
+    });
   });
 
   await refreshEnglishConfig();
-  logger.info(`[EnglishConfig] Updated recordKey=${recordKey}`);
-  await runEnglishConfigChangeHooks(recordKey, parsedValue);
-  const [view] = await enrichRows([updated]);
+  logger.info(`[EnglishConfig] Updated ${recordKeys.length} record(s): ${recordKeys.join(', ')}`);
+  for (const { def, parsedValue } of resolved) {
+    await runEnglishConfigChangeHooks(def.recordKey, parsedValue);
+  }
+
+  return enrichRows(updated);
+}
+
+export async function updateEnglishConfig(recordKey: string, value: unknown): Promise<EnglishConfigRecordView> {
+  const [view] = await updateEnglishConfigBulk([{ recordKey, value }]);
   if (!view) throw new Error(`Failed to load updated English config record: ${recordKey}`);
   return view;
 }

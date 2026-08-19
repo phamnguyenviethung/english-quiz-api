@@ -60,7 +60,7 @@ Seed các type cơ bản:
 | `recordKey`              | Unique key, ví dụ `question_pool.maxPerBucket`                |
 | `namespace`              | Runtime snapshot group, ví dụ `question_pool`                 |
 | `path`                   | Field path trong namespace, ví dụ `maxPerBucket` hoặc `items` |
-| `category`               | Nhóm hiển thị: `pool`, `jobs`, `reading`                      |
+| `category`               | Pipeline hiển thị: `questions`, `reading`, `reading_question` |
 | `label`, `description`   | Text hiển thị cho admin                                       |
 | `recordTypeId`           | FK đến `english_config_record_types.id`                       |
 | `valueText`              | Current value cho `str`                                       |
@@ -155,8 +155,11 @@ Service này không có UI riêng — config được thao tác qua HTTP API (pr
 
 - `GET /config` — snapshot runtime hiện tại (đọc từ memory).
 - `GET /config/records` — list toàn bộ config records (kèm value/default/validation/uiSchema) theo category/sort order.
+- `PATCH /config/records` body `{ changes: [{ recordKey, value }] }` — update **nhiều** record trong 1 transaction.
 - `PATCH /config/:recordKey` body `{ value }` — validate rồi update 1 record, refresh snapshot ngay.
 - `POST /config/:recordKey/reset` — ghi default typed value qua cùng validation path.
+
+`PATCH /config/records` áp hết thay đổi vào snapshot rồi mới validate **một lần**, nên là cách duy nhất sửa được các field ràng buộc lẫn nhau cùng lúc: đặt `manualFillMinCount: 5` khi `manualFillDefaultCount` còn là `3` sẽ luôn 400 nếu gọi `PATCH /config/:recordKey` lần lượt, vì Zod refine (`manualFillMinCount <= manualFillDefaultCount`) chạy trên từng request. Sai một record thì rollback toàn bộ. Route này khai **trước** `/config/:recordKey` để `records` không bị match làm `recordKey`. `updateEnglishConfig()` giờ chỉ là wrapper 1-phần-tử của `updateEnglishConfigBulk()`, nên hai đường đi hành xử giống hệt nhau (kể cả change hooks ở §1).
 
 Tất cả các route này chỉ dùng được với tài khoản admin (xem `docs/admin-auth.md`). Server-side validation trong service là source of truth. `uiSchema`/`validation` metadata vẫn được trả về để client (nếu có) render typed controls.
 
@@ -164,12 +167,13 @@ Tất cả các route này chỉ dùng được với tài khoản admin (xem `d
 
 1. Thêm default vào `EnglishConfigDefaults` nếu cần namespace mới hoặc field mới.
 2. Thêm hoặc extend Zod schema trong `englishConfig.defaults.ts`.
-3. Thêm record definition vào `ENGLISH_CONFIG_RECORD_DEFINITIONS`.
+3. Thêm record definition vào `ENGLISH_CONFIG_RECORD_DEFINITIONS`. Với 3 namespace toàn số (`question_pool`, `reading_passage`, `reading_question`), record được sinh từ bảng `*_FIELDS: Record<keyof Config, ConfigFieldMeta>` — thêm field vào Zod schema mà quên khai ở bảng sẽ **lỗi compile**, không âm thầm rơi về tên path.
 4. Chọn đúng `recordType`: `str`, `num`, `boolean`, `arr`, hoặc `obj`.
-5. Thêm `validation` và `uiSchema` để UI render typed controls, không dùng JSON editor.
-6. Wire runtime đọc `getEnglishConfigSnapshot()` thay vì đọc DB trực tiếp.
-7. Update docs này và docs nghiệp vụ liên quan.
-8. Verify type/build/format checks.
+5. Thêm `validation` và `uiSchema` để UI render typed controls, không dùng JSON editor. `min`/`max` ở đây phải **khớp Zod schema** — lệch thì UI cho nhập giá trị mà server chắc chắn reject. Hai field trình bày thêm: `unit` (hậu tố cạnh ô nhập, vd `câu`/`bài`/`luồng`) và `display: 'percent'` (giá trị lưu là ratio `0..1` nhưng admin UI nhập/hiện `0..100`).
+6. Đặt `category` (một trong `questions` / `reading` / `reading_question`) và `sortOrder` theo sơ đồ `<pipeline base> + <section base> + <index>`: pipeline base `1000`/`2000`/`3000`; section base `0` ngưỡng, `50` phân bổ, `100` sinh thủ công, `200` tự động & cron. Dashboard suy ra section từ `namespace`/`path` chứ không đọc `sortOrder`, nhưng giữ đúng dải này để thứ tự trong mỗi card khớp với nhóm.
+7. Wire runtime đọc `getEnglishConfigSnapshot()` thay vì đọc DB trực tiếp.
+8. Update docs này và docs nghiệp vụ liên quan.
+9. Verify type/build/format checks.
 
 ## 8. Không Nên Đưa Vào Config V1
 

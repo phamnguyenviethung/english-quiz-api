@@ -221,7 +221,15 @@ export type EnglishConfigFieldSchema = {
   fields?: Record<string, EnglishConfigFieldSchema>;
   itemType?: EnglishConfigRecordTypeKey;
   itemFields?: Record<string, EnglishConfigFieldSchema>;
+  /** Hậu tố hiển thị cạnh ô nhập: 'câu' | 'bài' | 'luồng' | 'lần' | '%'. */
+  unit?: string;
+  /** Giá trị lưu là ratio 0..1 nhưng admin UI nhập/hiện dưới dạng 0..100. */
+  display?: 'percent';
 };
+
+/** Nhóm cấp 1 của admin UI: mỗi category là một pipeline độc lập. */
+export const ENGLISH_CONFIG_CATEGORIES = ['questions', 'reading', 'reading_question'] as const;
+export type EnglishConfigCategory = (typeof ENGLISH_CONFIG_CATEGORIES)[number];
 
 export interface EnglishConfigRecordTypeDefinition {
   key: EnglishConfigRecordTypeKey;
@@ -234,7 +242,7 @@ export interface EnglishConfigRecordDefinition<T = unknown> {
   recordKey: string;
   namespace: EnglishConfigKey;
   path: string;
-  category: string;
+  category: EnglishConfigCategory;
   label: string;
   description: string;
   recordType: EnglishConfigRecordTypeKey;
@@ -244,12 +252,13 @@ export interface EnglishConfigRecordDefinition<T = unknown> {
   sortOrder: number;
 }
 
-const intField = (label: string, min = 0, max?: number): EnglishConfigFieldSchema => ({
+const intField = (label: string, min = 0, max?: number, unit?: string): EnglishConfigFieldSchema => ({
   type: 'num',
   label,
   integer: true,
   min,
-  ...(max === undefined ? {} : { max })
+  ...(max === undefined ? {} : { max }),
+  ...(unit === undefined ? {} : { unit })
 });
 
 const percentField = (label: string): EnglishConfigFieldSchema => ({
@@ -257,197 +266,338 @@ const percentField = (label: string): EnglishConfigFieldSchema => ({
   label,
   min: 0,
   max: 1,
-  step: 0.01
+  step: 0.01,
+  unit: '%',
+  display: 'percent'
+});
+
+const boolField = (label: string): EnglishConfigFieldSchema => ({ type: 'boolean', label });
+
+const cronScheduleField = (label: string): EnglishConfigFieldSchema => ({
+  type: 'arr',
+  label,
+  itemFields: {
+    name: { type: 'str', label: 'Tên scheduler' },
+    cron: { type: 'str', label: 'Cron expression' }
+  }
 });
 
 const quizDistributionField: EnglishConfigFieldSchema = {
   type: 'arr',
-  label: 'Quiz Distribution',
+  label: 'Phân bổ loại câu hỏi',
   itemFields: {
     quizType: {
       type: 'str',
-      label: 'Quiz type',
+      label: 'Loại câu hỏi',
       options: QUIZ_TYPES
     },
-    weight: intField('Weight', 0),
-    enabled: {
-      type: 'boolean',
-      label: 'Enabled'
-    }
+    weight: intField('Trọng số', 0),
+    enabled: boolField('Bật')
   }
 };
 
-export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] = [
-  ...Object.entries(EnglishConfigDefaults.question_pool).map(([path, defaultValue], index) => {
-    const schema =
-      path === 'refillThresholdRatio' ? percentField(path) : intField(path, path === 'maxPerBucket' ? 1 : 1);
+/**
+ * Metadata trình bày cho từng field của một namespace. Khai theo `Record<keyof Config, ...>`
+ * để thêm field vào schema mà quên khai ở đây sẽ lỗi compile chứ không âm thầm rơi về tên path.
+ */
+interface ConfigFieldMeta {
+  label: string;
+  description: string;
+  category: EnglishConfigCategory;
+  sortOrder: number;
+  schema: EnglishConfigFieldSchema;
+}
+
+const QUESTION_POOL_FIELDS: Record<keyof QuestionPoolConfig, ConfigFieldMeta> = {
+  maxPerBucket: {
+    label: 'Số câu tối đa mỗi bucket',
+    description: 'Số câu hỏi giữ sẵn cho mỗi cặp (level, loại câu hỏi). Đạt ngưỡng này thì job refill dừng sinh thêm.',
+    category: 'questions',
+    sortOrder: 1000,
+    schema: intField('Số câu tối đa mỗi bucket', 1, undefined, 'câu')
+  },
+  refillThresholdRatio: {
+    label: 'Ngưỡng kích hoạt refill',
+    description: 'Tồn kho tụt dưới tỷ lệ này so với mức tối đa thì bucket được đưa vào hàng đợi refill.',
+    category: 'questions',
+    sortOrder: 1010,
+    schema: percentField('Ngưỡng kích hoạt refill')
+  },
+  perBucketGenerationCap: {
+    label: 'Trần sinh mỗi bucket một lần',
+    description: 'Trần số câu sinh cho một bucket trong một lần refill, tránh dồn hết quota AI vào một bucket.',
+    category: 'questions',
+    sortOrder: 1020,
+    schema: intField('Trần sinh mỗi bucket một lần', 1, undefined, 'câu')
+  },
+  manualFillMinCount: {
+    label: 'Số câu tối thiểu mỗi lần sinh thủ công',
+    description: 'Chặn dưới cho ô số lượng ở màn Sinh hàng loạt.',
+    category: 'questions',
+    sortOrder: 1100,
+    schema: intField('Số câu tối thiểu mỗi lần sinh thủ công', 1, undefined, 'câu')
+  },
+  manualFillDefaultCount: {
+    label: 'Số câu mặc định mỗi lần sinh thủ công',
+    description: 'Giá trị điền sẵn ở màn Sinh hàng loạt. Phải nằm giữa mức tối thiểu và tối đa.',
+    category: 'questions',
+    sortOrder: 1110,
+    schema: intField('Số câu mặc định mỗi lần sinh thủ công', 1, undefined, 'câu')
+  },
+  manualFillMaxCount: {
+    label: 'Số câu tối đa mỗi lần sinh thủ công',
+    description: 'Chặn trên cho ô số lượng ở màn Sinh hàng loạt.',
+    category: 'questions',
+    sortOrder: 1120,
+    schema: intField('Số câu tối đa mỗi lần sinh thủ công', 1, undefined, 'câu')
+  },
+  manualFillConcurrency: {
+    label: 'Số luồng sinh song song',
+    description:
+      'Số bucket được sinh song song trong một lần chạy thủ công. Tăng thì nhanh hơn nhưng dễ chạm rate limit của model.',
+    category: 'questions',
+    sortOrder: 1130,
+    schema: intField('Số luồng sinh song song', 1, undefined, 'luồng')
+  }
+};
+
+const READING_PASSAGE_FIELDS: Record<keyof ReadingPassageConfig, ConfigFieldMeta> = {
+  maxPerBucket: {
+    label: 'Số bài đọc tối đa mỗi bucket',
+    description: 'Số bài đọc giữ sẵn cho mỗi cặp (level, chủ đề). Đạt ngưỡng này thì job refill dừng sinh thêm.',
+    category: 'reading',
+    sortOrder: 2000,
+    schema: intField('Số bài đọc tối đa mỗi bucket', 1, undefined, 'bài')
+  },
+  refillThresholdRatio: {
+    label: 'Ngưỡng kích hoạt refill',
+    description: 'Tồn kho tụt dưới tỷ lệ này so với mức tối đa thì bucket được đưa vào hàng đợi refill.',
+    category: 'reading',
+    sortOrder: 2010,
+    schema: percentField('Ngưỡng kích hoạt refill')
+  },
+  perBucketGenerationCap: {
+    label: 'Trần sinh mỗi bucket một lần',
+    description: 'Trần số bài đọc sinh cho một bucket trong một lần refill.',
+    category: 'reading',
+    sortOrder: 2020,
+    schema: intField('Trần sinh mỗi bucket một lần', 1, undefined, 'bài')
+  },
+  excludeRecentTitleCount: {
+    label: 'Số tiêu đề gần nhất cần tránh lặp',
+    description: 'Số tiêu đề gần nhất trong cùng bucket đưa vào prompt để model không lặp lại nội dung cũ.',
+    category: 'reading',
+    sortOrder: 2030,
+    schema: intField('Số tiêu đề gần nhất cần tránh lặp', 0, undefined, 'tiêu đề')
+  },
+  manualFillMinCount: {
+    label: 'Số bài tối thiểu mỗi lần sinh thủ công',
+    description: 'Chặn dưới cho ô số lượng ở màn Sinh hàng loạt.',
+    category: 'reading',
+    sortOrder: 2100,
+    schema: intField('Số bài tối thiểu mỗi lần sinh thủ công', 1, undefined, 'bài')
+  },
+  manualFillDefaultCount: {
+    label: 'Số bài mặc định mỗi lần sinh thủ công',
+    description: 'Giá trị điền sẵn ở màn Sinh hàng loạt. Phải nằm giữa mức tối thiểu và tối đa.',
+    category: 'reading',
+    sortOrder: 2110,
+    schema: intField('Số bài mặc định mỗi lần sinh thủ công', 1, undefined, 'bài')
+  },
+  manualFillMaxCount: {
+    label: 'Số bài tối đa mỗi lần sinh thủ công',
+    description: 'Chặn trên cho ô số lượng ở màn Sinh hàng loạt.',
+    category: 'reading',
+    sortOrder: 2120,
+    schema: intField('Số bài tối đa mỗi lần sinh thủ công', 1, undefined, 'bài')
+  },
+  manualFillConcurrency: {
+    label: 'Số luồng sinh song song',
+    description:
+      'Số bucket được sinh song song trong một lần chạy thủ công. Tăng thì nhanh hơn nhưng dễ chạm rate limit của model.',
+    category: 'reading',
+    sortOrder: 2130,
+    schema: intField('Số luồng sinh song song', 1, undefined, 'luồng')
+  }
+};
+
+const READING_QUESTION_FIELDS: Record<keyof ReadingQuestionConfig, ConfigFieldMeta> = {
+  questionsPerPassage: {
+    label: 'Số câu hỏi mỗi bài đọc',
+    description: 'Số câu hỏi đọc hiểu sinh cho mỗi bài đọc. Batch schema của model cap ở 5 câu nên không đặt cao hơn.',
+    category: 'reading_question',
+    sortOrder: 3000,
+    schema: intField('Số câu hỏi mỗi bài đọc', 1, 5, 'câu')
+  },
+  perPassageGenerationCap: {
+    label: 'Trần sinh mỗi bài đọc một lần',
+    description: 'Trần số câu sinh cho một bài đọc trong một lần chạy. Batch schema của model cap ở 5 câu.',
+    category: 'reading_question',
+    sortOrder: 3010,
+    schema: intField('Trần sinh mỗi bài đọc một lần', 1, 5, 'câu')
+  },
+  maxGenerationAttempts: {
+    label: 'Số lần thử tối đa mỗi bài đọc',
+    description:
+      'Số lần thử sinh câu hỏi cho một bài đọc trước khi bỏ qua hẳn. Bài quá mỏng sẽ hỏng mãi nên cần chặn để khỏi đốt token.',
+    category: 'reading_question',
+    sortOrder: 3020,
+    schema: intField('Số lần thử tối đa mỗi bài đọc', 0, undefined, 'lần')
+  },
+  manualFillMinCount: {
+    label: 'Số câu tối thiểu mỗi lần sinh thủ công',
+    description: 'Chặn dưới cho ô số lượng ở màn Sinh hàng loạt.',
+    category: 'reading_question',
+    sortOrder: 3100,
+    schema: intField('Số câu tối thiểu mỗi lần sinh thủ công', 1, undefined, 'câu')
+  },
+  manualFillDefaultCount: {
+    label: 'Số câu mặc định mỗi lần sinh thủ công',
+    description: 'Giá trị điền sẵn ở màn Sinh hàng loạt. Phải nằm giữa mức tối thiểu và tối đa.',
+    category: 'reading_question',
+    sortOrder: 3110,
+    schema: intField('Số câu mặc định mỗi lần sinh thủ công', 1, undefined, 'câu')
+  },
+  manualFillMaxCount: {
+    label: 'Số câu tối đa mỗi lần sinh thủ công',
+    description: 'Chặn trên cho ô số lượng ở màn Sinh hàng loạt.',
+    category: 'reading_question',
+    sortOrder: 3120,
+    schema: intField('Số câu tối đa mỗi lần sinh thủ công', 1, undefined, 'câu')
+  },
+  manualFillConcurrency: {
+    label: 'Số luồng sinh song song',
+    description:
+      'Số bài đọc được sinh câu hỏi song song trong một lần chạy thủ công. Tăng thì nhanh hơn nhưng dễ chạm rate limit của model.',
+    category: 'reading_question',
+    sortOrder: 3130,
+    schema: intField('Số luồng sinh song song', 1, undefined, 'luồng')
+  }
+};
+
+function numericRecords<T extends Record<string, number>>(
+  namespace: EnglishConfigKey,
+  defaults: T,
+  fields: Record<keyof T, ConfigFieldMeta>
+): EnglishConfigRecordDefinition[] {
+  return (Object.keys(defaults) as (keyof T & string)[]).map((path) => {
+    const meta = fields[path];
     return {
-      recordKey: `question_pool.${path}`,
-      namespace: 'question_pool' as const,
+      recordKey: `${namespace}.${path}`,
+      namespace,
       path,
-      category: 'pool',
-      label: path,
-      description: 'English question pool setting.',
+      category: meta.category,
+      label: meta.label,
+      description: meta.description,
       recordType: 'num' as const,
-      defaultValue,
-      validation: schema,
-      uiSchema: schema,
-      sortOrder: 400 + index * 10
+      defaultValue: defaults[path],
+      validation: meta.schema,
+      uiSchema: meta.schema,
+      sortOrder: meta.sortOrder
     };
-  }),
+  });
+}
+
+export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] = [
+  // ── Câu hỏi ────────────────────────────────────────────────────────────────
+  ...numericRecords('question_pool', EnglishConfigDefaults.question_pool, QUESTION_POOL_FIELDS),
   {
     recordKey: 'quiz_distribution.items',
     namespace: 'quiz_distribution',
     path: 'items',
-    category: 'pool',
-    label: 'Quiz Distribution',
-    description: 'Weighted quiz type distribution for pool and realtime generation.',
+    category: 'questions',
+    label: 'Phân bổ loại câu hỏi',
+    description:
+      'Trọng số bốc từng loại câu hỏi, dùng chung cho cả pool lẫn sinh realtime. Phải có ít nhất một loại đang bật với trọng số lớn hơn 0.',
     recordType: 'arr',
     defaultValue: EnglishConfigDefaults.quiz_distribution,
     validation: quizDistributionField,
     uiSchema: quizDistributionField,
-    sortOrder: 500
+    sortOrder: 1050
   },
   {
     recordKey: 'job_flags.questionGenEnabled',
     namespace: 'job_flags',
     path: 'questionGenEnabled',
-    category: 'jobs',
+    category: 'questions',
     label: 'Bật Question-Gen (on-demand)',
     description: 'Tắt sẽ không tự refill pool khi pool cạn (trigger qua /pool/fill).',
     recordType: 'boolean',
     defaultValue: EnglishConfigDefaults.job_flags.questionGenEnabled,
-    validation: { type: 'boolean', label: 'Bật Question-Gen (on-demand)' },
-    uiSchema: { type: 'boolean', label: 'Bật Question-Gen (on-demand)' },
-    sortOrder: 600
+    validation: boolField('Bật Question-Gen (on-demand)'),
+    uiSchema: boolField('Bật Question-Gen (on-demand)'),
+    sortOrder: 1200
   },
   {
     recordKey: 'job_flags.poolRefillEnabled',
     namespace: 'job_flags',
     path: 'poolRefillEnabled',
-    category: 'jobs',
+    category: 'questions',
     label: 'Bật Pool-Refill (scheduled)',
-    description: 'Tắt sẽ bỏ qua các lần refill tự động theo lịch (xem pool_refill_schedule.items).',
+    description: 'Tắt sẽ bỏ qua các lần refill tự động theo lịch bên dưới.',
     recordType: 'boolean',
     defaultValue: EnglishConfigDefaults.job_flags.poolRefillEnabled,
-    validation: { type: 'boolean', label: 'Bật Pool-Refill (scheduled)' },
-    uiSchema: { type: 'boolean', label: 'Bật Pool-Refill (scheduled)' },
-    sortOrder: 610
+    validation: boolField('Bật Pool-Refill (scheduled)'),
+    uiSchema: boolField('Bật Pool-Refill (scheduled)'),
+    sortOrder: 1210
   },
   {
     recordKey: 'job_flags.poolRefillMaxQuestionsPerRun',
     namespace: 'job_flags',
     path: 'poolRefillMaxQuestionsPerRun',
-    category: 'jobs',
+    category: 'questions',
     label: 'Max câu / 1 lần Pool-Refill',
     description: 'Giới hạn tổng số câu hỏi generate trong mỗi lần Pool-Refill chạy (tối ưu cost AI).',
     recordType: 'num',
     defaultValue: EnglishConfigDefaults.job_flags.poolRefillMaxQuestionsPerRun,
-    validation: intField('Max câu / 1 lần Pool-Refill', 1),
-    uiSchema: intField('Max câu / 1 lần Pool-Refill', 1),
-    sortOrder: 620
-  },
-  {
-    recordKey: 'job_flags.readingRefillEnabled',
-    namespace: 'job_flags',
-    path: 'readingRefillEnabled',
-    category: 'jobs',
-    label: 'Bật Reading-Refill (scheduled)',
-    description: 'Tắt sẽ bỏ qua các lần sinh reading tự động theo lịch (xem reading_refill_schedule.items).',
-    recordType: 'boolean',
-    defaultValue: EnglishConfigDefaults.job_flags.readingRefillEnabled,
-    validation: { type: 'boolean', label: 'Bật Reading-Refill (scheduled)' },
-    uiSchema: { type: 'boolean', label: 'Bật Reading-Refill (scheduled)' },
-    sortOrder: 640
-  },
-  {
-    recordKey: 'job_flags.readingRefillMaxPerRun',
-    namespace: 'job_flags',
-    path: 'readingRefillMaxPerRun',
-    category: 'jobs',
-    label: 'Max bài đọc / 1 lần Reading-Refill',
-    description: 'Giới hạn tổng số reading passage sinh trong mỗi lần Reading-Refill chạy (tối ưu cost AI).',
-    recordType: 'num',
-    defaultValue: EnglishConfigDefaults.job_flags.readingRefillMaxPerRun,
-    validation: intField('Max bài đọc / 1 lần Reading-Refill', 1),
-    uiSchema: intField('Max bài đọc / 1 lần Reading-Refill', 1),
-    sortOrder: 650
-  },
-  {
-    recordKey: 'job_flags.readingQuestionRefillEnabled',
-    namespace: 'job_flags',
-    path: 'readingQuestionRefillEnabled',
-    category: 'jobs',
-    label: 'Bật Reading-Question-Refill (scheduled)',
-    description:
-      'Tắt sẽ bỏ qua các lần sinh câu hỏi đọc hiểu tự động theo lịch ' +
-      '(xem reading_question_refill_schedule.items).',
-    recordType: 'boolean',
-    defaultValue: EnglishConfigDefaults.job_flags.readingQuestionRefillEnabled,
-    validation: { type: 'boolean', label: 'Bật Reading-Question-Refill (scheduled)' },
-    uiSchema: { type: 'boolean', label: 'Bật Reading-Question-Refill (scheduled)' },
-    sortOrder: 660
-  },
-  {
-    recordKey: 'job_flags.readingQuestionRefillMaxPerRun',
-    namespace: 'job_flags',
-    path: 'readingQuestionRefillMaxPerRun',
-    category: 'jobs',
-    label: 'Max câu hỏi / 1 lần Reading-Question-Refill',
-    description:
-      'Giới hạn tổng số câu hỏi đọc hiểu sinh trong mỗi lần chạy (tối ưu cost AI). ' +
-      'Mỗi bài đọc ăn questionsPerPassage câu.',
-    recordType: 'num',
-    defaultValue: EnglishConfigDefaults.job_flags.readingQuestionRefillMaxPerRun,
-    validation: intField('Max câu hỏi / 1 lần Reading-Question-Refill', 1),
-    uiSchema: intField('Max câu hỏi / 1 lần Reading-Question-Refill', 1),
-    sortOrder: 670
+    validation: intField('Max câu / 1 lần Pool-Refill', 1, undefined, 'câu'),
+    uiSchema: intField('Max câu / 1 lần Pool-Refill', 1, undefined, 'câu'),
+    sortOrder: 1220
   },
   {
     recordKey: 'pool_refill_schedule.items',
     namespace: 'pool_refill_schedule',
     path: 'items',
-    category: 'jobs',
+    category: 'questions',
     label: 'Lịch chạy Pool-Refill (cron)',
     description:
       'Danh sách các mốc giờ chạy scheduled pool-refill. Đổi giá trị này sẽ reconcile lại BullMQ job ' +
       'schedulers ngay lập tức (thêm/xoá scheduler), không cần restart.',
     recordType: 'arr',
     defaultValue: EnglishConfigDefaults.pool_refill_schedule,
-    validation: {
-      type: 'arr',
-      label: 'Pool Refill Schedule',
-      itemFields: {
-        name: { type: 'str', label: 'Tên scheduler' },
-        cron: { type: 'str', label: 'Cron expression' }
-      }
-    },
-    uiSchema: {
-      type: 'arr',
-      label: 'Pool Refill Schedule',
-      itemFields: {
-        name: { type: 'str', label: 'Tên scheduler' },
-        cron: { type: 'str', label: 'Cron expression' }
-      }
-    },
-    sortOrder: 630
+    validation: cronScheduleField('Lịch chạy Pool-Refill'),
+    uiSchema: cronScheduleField('Lịch chạy Pool-Refill'),
+    sortOrder: 1230
   },
-  ...Object.entries(EnglishConfigDefaults.reading_passage).map(([path, defaultValue], index) => {
-    const schema = path === 'refillThresholdRatio' ? percentField(path) : intField(path, 0);
-    return {
-      recordKey: `reading_passage.${path}`,
-      namespace: 'reading_passage' as const,
-      path,
-      category: 'reading',
-      label: path,
-      description: 'English reading passage setting.',
-      recordType: 'num' as const,
-      defaultValue,
-      validation: schema,
-      uiSchema: schema,
-      sortOrder: 700 + index * 10
-    };
-  }),
+
+  // ── Bài đọc ────────────────────────────────────────────────────────────────
+  ...numericRecords('reading_passage', EnglishConfigDefaults.reading_passage, READING_PASSAGE_FIELDS),
+  {
+    recordKey: 'job_flags.readingRefillEnabled',
+    namespace: 'job_flags',
+    path: 'readingRefillEnabled',
+    category: 'reading',
+    label: 'Bật Reading-Refill (scheduled)',
+    description: 'Tắt sẽ bỏ qua các lần sinh reading tự động theo lịch bên dưới.',
+    recordType: 'boolean',
+    defaultValue: EnglishConfigDefaults.job_flags.readingRefillEnabled,
+    validation: boolField('Bật Reading-Refill (scheduled)'),
+    uiSchema: boolField('Bật Reading-Refill (scheduled)'),
+    sortOrder: 2200
+  },
+  {
+    recordKey: 'job_flags.readingRefillMaxPerRun',
+    namespace: 'job_flags',
+    path: 'readingRefillMaxPerRun',
+    category: 'reading',
+    label: 'Max bài đọc / 1 lần Reading-Refill',
+    description: 'Giới hạn tổng số reading passage sinh trong mỗi lần Reading-Refill chạy (tối ưu cost AI).',
+    recordType: 'num',
+    defaultValue: EnglishConfigDefaults.job_flags.readingRefillMaxPerRun,
+    validation: intField('Max bài đọc / 1 lần Reading-Refill', 1, undefined, 'bài'),
+    uiSchema: intField('Max bài đọc / 1 lần Reading-Refill', 1, undefined, 'bài'),
+    sortOrder: 2210
+  },
   {
     recordKey: 'reading_refill_schedule.items',
     namespace: 'reading_refill_schedule',
@@ -459,68 +609,55 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
       'schedulers ngay lập tức (thêm/xoá scheduler), không cần restart.',
     recordType: 'arr',
     defaultValue: EnglishConfigDefaults.reading_refill_schedule,
-    validation: {
-      type: 'arr',
-      label: 'Reading Refill Schedule',
-      itemFields: {
-        name: { type: 'str', label: 'Tên scheduler' },
-        cron: { type: 'str', label: 'Cron expression' }
-      }
-    },
-    uiSchema: {
-      type: 'arr',
-      label: 'Reading Refill Schedule',
-      itemFields: {
-        name: { type: 'str', label: 'Tên scheduler' },
-        cron: { type: 'str', label: 'Cron expression' }
-      }
-    },
-    sortOrder: 800
+    validation: cronScheduleField('Lịch chạy Reading-Refill'),
+    uiSchema: cronScheduleField('Lịch chạy Reading-Refill'),
+    sortOrder: 2220
   },
-  ...Object.entries(EnglishConfigDefaults.reading_question).map(([path, defaultValue], index) => {
-    const schema = intField(path, path === 'maxGenerationAttempts' ? 0 : 1);
-    return {
-      recordKey: `reading_question.${path}`,
-      namespace: 'reading_question' as const,
-      path,
-      category: 'reading',
-      label: path,
-      description: 'English reading question setting.',
-      recordType: 'num' as const,
-      defaultValue,
-      validation: schema,
-      uiSchema: schema,
-      sortOrder: 900 + index * 10
-    };
-  }),
+
+  // ── Câu hỏi đọc hiểu ───────────────────────────────────────────────────────
+  ...numericRecords('reading_question', EnglishConfigDefaults.reading_question, READING_QUESTION_FIELDS),
+  {
+    recordKey: 'job_flags.readingQuestionRefillEnabled',
+    namespace: 'job_flags',
+    path: 'readingQuestionRefillEnabled',
+    category: 'reading_question',
+    label: 'Bật Reading-Question-Refill (scheduled)',
+    description: 'Tắt sẽ bỏ qua các lần sinh câu hỏi đọc hiểu tự động theo lịch bên dưới.',
+    recordType: 'boolean',
+    defaultValue: EnglishConfigDefaults.job_flags.readingQuestionRefillEnabled,
+    validation: boolField('Bật Reading-Question-Refill (scheduled)'),
+    uiSchema: boolField('Bật Reading-Question-Refill (scheduled)'),
+    sortOrder: 3200
+  },
+  {
+    recordKey: 'job_flags.readingQuestionRefillMaxPerRun',
+    namespace: 'job_flags',
+    path: 'readingQuestionRefillMaxPerRun',
+    category: 'reading_question',
+    label: 'Max câu hỏi / 1 lần Reading-Question-Refill',
+    description:
+      'Giới hạn tổng số câu hỏi đọc hiểu sinh trong mỗi lần chạy (tối ưu cost AI). ' +
+      'Mỗi bài đọc ăn "Số câu hỏi mỗi bài đọc" câu.',
+    recordType: 'num',
+    defaultValue: EnglishConfigDefaults.job_flags.readingQuestionRefillMaxPerRun,
+    validation: intField('Max câu hỏi / 1 lần Reading-Question-Refill', 1, undefined, 'câu'),
+    uiSchema: intField('Max câu hỏi / 1 lần Reading-Question-Refill', 1, undefined, 'câu'),
+    sortOrder: 3210
+  },
   {
     recordKey: 'reading_question_refill_schedule.items',
     namespace: 'reading_question_refill_schedule',
     path: 'items',
-    category: 'reading',
+    category: 'reading_question',
     label: 'Lịch chạy Reading-Question-Refill (cron)',
     description:
       'Danh sách các mốc giờ chạy scheduled reading-question-refill. Đổi giá trị này sẽ reconcile lại ' +
       'BullMQ job schedulers ngay lập tức (thêm/xoá scheduler), không cần restart.',
     recordType: 'arr',
     defaultValue: EnglishConfigDefaults.reading_question_refill_schedule,
-    validation: {
-      type: 'arr',
-      label: 'Reading Question Refill Schedule',
-      itemFields: {
-        name: { type: 'str', label: 'Tên scheduler' },
-        cron: { type: 'str', label: 'Cron expression' }
-      }
-    },
-    uiSchema: {
-      type: 'arr',
-      label: 'Reading Question Refill Schedule',
-      itemFields: {
-        name: { type: 'str', label: 'Tên scheduler' },
-        cron: { type: 'str', label: 'Cron expression' }
-      }
-    },
-    sortOrder: 950
+    validation: cronScheduleField('Lịch chạy Reading-Question-Refill'),
+    uiSchema: cronScheduleField('Lịch chạy Reading-Question-Refill'),
+    sortOrder: 3220
   }
 ];
 

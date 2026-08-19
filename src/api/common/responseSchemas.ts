@@ -8,7 +8,9 @@ import {
   JobFlagsSchema,
   PoolRefillScheduleSchema,
   ReadingPassageSchema as ReadingPassageConfigSchema,
-  ReadingRefillScheduleSchema
+  ReadingRefillScheduleSchema,
+  ReadingQuestionSchema as ReadingQuestionConfigSchema,
+  ReadingQuestionRefillScheduleSchema
 } from '@/core/services/english/englishConfig.defaults';
 import {
   VocabQuestionSchema,
@@ -388,7 +390,9 @@ export const EnglishConfigSnapshotSchema = z.object({
   job_flags: JobFlagsSchema,
   pool_refill_schedule: PoolRefillScheduleSchema,
   reading_passage: ReadingPassageConfigSchema,
-  reading_refill_schedule: ReadingRefillScheduleSchema
+  reading_refill_schedule: ReadingRefillScheduleSchema,
+  reading_question: ReadingQuestionConfigSchema,
+  reading_question_refill_schedule: ReadingQuestionRefillScheduleSchema
 });
 
 export const EnglishConfigSnapshotResponseSchema = z.object({
