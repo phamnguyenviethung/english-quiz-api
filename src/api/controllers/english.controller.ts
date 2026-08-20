@@ -252,13 +252,30 @@ async function popReading(
 ) {
   if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
 
-  const result = await readingQuestionService.popPassageWithQuestions({
+  const allowedTopicIds = resolveAllowedTopicIds(tenant);
+  const base = { excludeIds: input.excludeIds, allowedTopicIds };
+
+  let result = await readingQuestionService.popPassageWithQuestions({
+    ...base,
     cefrLevel: input.cefrLevel,
-    topicId: input.topicId,
-    excludeIds: input.excludeIds,
-    allowedTopicIds: resolveAllowedTopicIds(tenant)
+    topicId: input.topicId
   });
-  if (!result) throw new NotFoundException('Không có bài đọc nào đã sẵn sàng (đủ câu hỏi) cho bucket này');
+
+  // Fallback 1: đúng bucket không còn bài → thử topic khác, giữ nguyên cefrLevel
+  if (!result && input.topicId !== undefined) {
+    logger.warn(
+      `[popReading] Không có bài cho topicId=${input.topicId} cefrLevel=${input.cefrLevel ?? 'any'}, fallback sang topic khác cùng level`
+    );
+    result = await readingQuestionService.popPassageWithQuestions({ ...base, cefrLevel: input.cefrLevel });
+  }
+
+  // Fallback 2: vẫn không có → bỏ luôn ràng buộc cefrLevel, lấy bài bất kỳ trong phạm vi tenant
+  if (!result && input.cefrLevel !== undefined) {
+    logger.warn(`[popReading] Vẫn không có bài cùng cefrLevel=${input.cefrLevel}, fallback sang level bất kỳ`);
+    result = await readingQuestionService.popPassageWithQuestions(base);
+  }
+
+  if (!result) throw new NotFoundException('Không có bài đọc nào đã sẵn sàng (đủ câu hỏi)');
   return result;
 }
 

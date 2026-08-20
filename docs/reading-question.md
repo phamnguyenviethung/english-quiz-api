@@ -228,12 +228,20 @@ Tắt hoặc xoá câu làm bài trở thành "thiếu câu" và sẽ được c
 
 ### Tenant — `/english/readings/*`, yêu cầu tenant API key
 
-| Method | Path                      | Ghi chú                                                                          |
-| ------ | ------------------------- | -------------------------------------------------------------------------------- |
-| `GET`  | `/english/readings/pop`   | 1 bài random kèm trọn bộ câu hỏi. Không destructive. Không có bài sẵn sàng → 404 |
-| `GET`  | `/english/readings/count` | Số bài đã sẵn sàng theo `cefrLevel` / `topicId`                                  |
+| Method | Path                      | Ghi chú                                                                               |
+| ------ | ------------------------- | -------------------------------------------------------------------------------------- |
+| `GET`  | `/english/readings/pop`   | 1 bài random kèm trọn bộ câu hỏi. Không destructive. Có fallback nới bucket, xem dưới |
+| `GET`  | `/english/readings/count` | Số bài đã sẵn sàng theo `cefrLevel` / `topicId`                                        |
 
 Chỉ trả bài đã **đủ** `questionsPerPassage` câu active — bài nửa vời không bao giờ được phục vụ.
+
+**Fallback khi đúng bucket không có bài:** `/pop` không trả 404 ngay khi thiếu bài đúng `topicId` + `cefrLevel` yêu cầu, mà nới dần điều kiện (mỗi bước vẫn tôn trọng allow-list topic của tenant):
+
+1. Đúng bucket: `topicId` + `cefrLevel` như request.
+2. Nếu request có truyền `topicId` mà (1) rỗng: bỏ ràng buộc `topicId`, giữ `cefrLevel` → topic khác cùng level.
+3. Nếu request có truyền `cefrLevel` mà (2) (hoặc (1) nếu không có `topicId`) vẫn rỗng: bỏ luôn `cefrLevel` → bài bất kỳ trong phạm vi tenant được phép.
+
+Chỉ thật sự 404 khi cả 3 bước trên đều rỗng (tenant không còn bài đọc nào sẵn sàng).
 
 **Lưu ý bảo mật:** bài đọc luôn gắn topic (không có bucket no-topic như question pool), nên "không truyền `topicId`" nghĩa là _mọi topic_. `assertTopicAllowed(tenant, null)` một mình **không đủ** để chặn — service nhận thêm `allowedTopicIds` và bó truy vấn theo allow-list của tenant. Tenant không được cấp topic nào thì `/pop` trả 404 và `/count` trả 0.
 
