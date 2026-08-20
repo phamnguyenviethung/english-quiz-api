@@ -275,6 +275,15 @@ async function popReading(
     result = await readingQuestionService.popPassageWithQuestions(base);
   }
 
+  // Fallback 3: pool sẵn sàng quá nhỏ so với excludeIds client đã tích luỹ → bỏ excludeIds,
+  // chấp nhận trả lại bài đã thấy còn hơn báo lỗi.
+  if (!result && input.excludeIds.length > 0) {
+    logger.warn(
+      `[popReading] Vẫn không có bài sau khi nới topic/level (excludeIds=${input.excludeIds.length} id), fallback bỏ excludeIds`
+    );
+    result = await readingQuestionService.popPassageWithQuestions({ allowedTopicIds });
+  }
+
   if (!result) throw new NotFoundException('Không có bài đọc nào đã sẵn sàng (đủ câu hỏi)');
   return result;
 }

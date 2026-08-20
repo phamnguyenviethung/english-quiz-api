@@ -240,6 +240,7 @@ Chỉ trả bài đã **đủ** `questionsPerPassage` câu active — bài nửa
 1. Đúng bucket: `topicId` + `cefrLevel` như request.
 2. Nếu request có truyền `topicId` mà (1) rỗng: bỏ ràng buộc `topicId`, giữ `cefrLevel` → topic khác cùng level.
 3. Nếu request có truyền `cefrLevel` mà (2) (hoặc (1) nếu không có `topicId`) vẫn rỗng: bỏ luôn `cefrLevel` → bài bất kỳ trong phạm vi tenant được phép.
+4. Nếu request có truyền `excludeIds` mà (3) vẫn rỗng (pool sẵn sàng nhỏ hơn số id client đã loại): bỏ luôn `excludeIds` — chấp nhận trả lại bài đã thấy còn hơn báo lỗi.
 
 Chỉ thật sự 404 khi cả 3 bước trên đều rỗng (tenant không còn bài đọc nào sẵn sàng).
 
