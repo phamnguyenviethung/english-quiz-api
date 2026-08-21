@@ -602,7 +602,7 @@ interface ListReadingQuestionBucketsQuery {
   cefrLevels?: string;
   topicIds?: string;
   passageIds?: string;
-  scope?: 'all' | 'deficient';
+  mode?: 'all' | 'deficient';
 }
 
 /** Preview: bài nào sẽ được sinh câu hỏi với đúng bộ tham số này, và mỗi bài bao nhiêu câu. */
@@ -614,7 +614,7 @@ async function listReadingQuestionBuckets(query: ListReadingQuestionBucketsQuery
   });
 
   const { matched, plan } = await readingQuestionRefillService.buildManualReadingQuestionRefillPlan({
-    scope: query.scope,
+    mode: query.mode,
     filter
   });
 
@@ -643,7 +643,7 @@ async function listReadingQuestionBuckets(query: ListReadingQuestionBucketsQuery
 
 interface TriggerReadingQuestionRefillInput {
   models?: string[];
-  scope?: 'all' | 'deficient';
+  mode?: 'all' | 'deficient';
   filter?: ReadingQuestionBucketFilterInput;
   bucketKeys?: string[];
 }
@@ -653,14 +653,14 @@ async function triggerReadingQuestionRefill(input: TriggerReadingQuestionRefillI
   const filter = toReadingQuestionBucketFilter(input.filter);
 
   logger.info(
-    `[Admin] Manual reading question refill scope=${input.scope ?? 'deficient'} ` +
+    `[Admin] Manual reading question refill mode=${input.mode ?? 'deficient'} ` +
       `models=${models.map((m) => m.model).join(',')} filter=${filter ? JSON.stringify(filter) : '-'} ` +
       `selectedBuckets=${input.bucketKeys?.length ?? '-'}`
   );
 
   return readingQuestionRefillService.runManualReadingQuestionRefill({
     models,
-    scope: input.scope,
+    mode: input.mode,
     filter,
     bucketKeys: input.bucketKeys
   });

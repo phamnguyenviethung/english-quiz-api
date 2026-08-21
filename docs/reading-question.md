@@ -255,9 +255,9 @@ curl -s -X POST localhost:3399/admin/reading-questions/generate \
   -d '{"passageId": 4}' | jq
 
 # Preview rồi chạy — plannedPassages phải khớp totalBuckets
-curl -s 'localhost:3399/admin/reading-questions/buckets?scope=deficient' -H 'Cookie: ...' | jq '.data.summary'
+curl -s 'localhost:3399/admin/reading-questions/buckets?mode=deficient' -H 'Cookie: ...' | jq '.data.summary'
 curl -s -X POST localhost:3399/admin/reading-questions/refill \
-  -H 'Content-Type: application/json' -H 'Cookie: ...' -d '{"scope":"deficient"}' | jq
+  -H 'Content-Type: application/json' -H 'Cookie: ...' -d '{"mode":"deficient"}' | jq
 
 # Bot lấy bài
 curl -s 'localhost:3399/english/readings/pop?cefrLevel=A1' -H 'Authorization: Bearer eqk_...' | jq

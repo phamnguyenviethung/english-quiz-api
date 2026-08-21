@@ -770,7 +770,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       cefrLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`.' })),
       topicIds: t.Optional(t.String({ description: 'CSV topic id, vd `3,7,12`.' })),
       passageIds: t.Optional(t.String({ description: 'CSV passage id — chốt đúng vài bài cụ thể.' })),
-      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')]))
+      mode: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')]))
     }),
     detail: {
       tags: ['Admin / Reading Questions'],
@@ -823,7 +823,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
             'đang bật `readingEnabled`. Model không tồn tại hoặc đang tắt trả 400.'
         })
       ),
-      scope: t.Optional(
+      mode: t.Optional(
         t.Union([t.Literal('all'), t.Literal('deficient')], {
           description: 'Mặc định `deficient` — chỉ bài còn thiếu câu. `all` bỏ qua điều kiện thiếu.'
         })

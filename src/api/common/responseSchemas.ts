@@ -355,7 +355,7 @@ export const ReadingQuestionBucketSchema = t.Object({
   topicName: t.Nullable(t.String()),
   currentCount: t.Number({ description: 'Số câu đang active của bài này.' }),
   deficiency: t.Number({ description: 'reading_question.questionsPerPassage - currentCount.' }),
-  plannedCount: t.Number({ description: 'Số câu sẽ sinh cho bài này. 0 = bị scope bỏ qua.' })
+  plannedCount: t.Number({ description: 'Số câu sẽ sinh cho bài này. 0 = bị mode bỏ qua.' })
 });
 
 export const ReadingQuestionBucketPreviewSchema = t.Object({

@@ -54,7 +54,7 @@ export interface ReadingQuestionBucketFilter {
 }
 
 export interface ScanReadingQuestionBucketsOptions {
-  scope: 'deficient' | 'all';
+  mode: 'deficient' | 'all';
   filter?: ReadingQuestionBucketFilter;
   bucketKeys?: string[];
 }
@@ -103,7 +103,7 @@ export async function scanReadingQuestionBuckets(
     });
   }
 
-  const filtered = options.scope === 'all' ? all : all.filter((b) => b.deficiency > 0);
+  const filtered = options.mode === 'all' ? all : all.filter((b) => b.deficiency > 0);
 
   return filtered.sort((a, b) => {
     if (b.deficiency !== a.deficiency) return b.deficiency - a.deficiency;
@@ -234,7 +234,7 @@ export async function runScheduledReadingQuestionRefill(
   });
 
   try {
-    const candidates = await scanReadingQuestionBuckets({ scope: 'deficient' });
+    const candidates = await scanReadingQuestionBuckets({ mode: 'deficient' });
     const plan = buildRefillPlan(candidates, {
       // Đơn vị budget ở đây là CÂU HỎI, mỗi passage ăn tối đa perPassageGenerationCap câu.
       maxQuestionsPerRun: getEnglishConfigSnapshot().job_flags.readingQuestionRefillMaxPerRun,
@@ -281,13 +281,13 @@ export async function runScheduledReadingQuestionRefill(
   }
 }
 
-export interface ManualReadingQuestionRefillScopeParams {
-  scope?: 'all' | 'deficient';
+export interface ManualReadingQuestionRefillModeParams {
+  mode?: 'all' | 'deficient';
   filter?: ReadingQuestionBucketFilter;
   bucketKeys?: string[];
 }
 
-export interface ManualReadingQuestionRefillParams extends ManualReadingQuestionRefillScopeParams {
+export interface ManualReadingQuestionRefillParams extends ManualReadingQuestionRefillModeParams {
   models: ResolvedStudyModel[];
 }
 
@@ -304,17 +304,17 @@ export interface ManualReadingQuestionRefillPlanResult {
  * (questionsPerPassage), admin không chọn từng lần.
  */
 export async function buildManualReadingQuestionRefillPlan(
-  params: ManualReadingQuestionRefillScopeParams
+  params: ManualReadingQuestionRefillModeParams
 ): Promise<ManualReadingQuestionRefillPlanResult> {
-  const scope = params.scope ?? 'deficient';
+  const mode = params.mode ?? 'deficient';
 
   const matched = await scanReadingQuestionBuckets({
-    scope: 'all',
+    mode: 'all',
     filter: params.filter,
     bucketKeys: params.bucketKeys
   });
 
-  const candidates = scope === 'all' ? matched : matched.filter((b) => b.deficiency > 0);
+  const candidates = mode === 'all' ? matched : matched.filter((b) => b.deficiency > 0);
 
   const plan = buildRefillPlan(candidates, {
     maxQuestionsPerRun: null,
@@ -331,7 +331,7 @@ export async function buildManualReadingQuestionRefillPlan(
 export async function runManualReadingQuestionRefill(
   params: ManualReadingQuestionRefillParams
 ): Promise<{ runId: string | null; totalBuckets: number }> {
-  const scope = params.scope ?? 'deficient';
+  const mode = params.mode ?? 'deficient';
   const { plan } = await buildManualReadingQuestionRefillPlan(params);
 
   const run = await englishCronJobTrackingService.startRun({
@@ -341,7 +341,7 @@ export async function runManualReadingQuestionRefill(
     deficientBuckets: plan.planned.length,
     metadata: {
       models: params.models.map((m) => m.model),
-      scope,
+      mode,
       filter: params.filter,
       selectedBuckets: params.bucketKeys?.length
     }
