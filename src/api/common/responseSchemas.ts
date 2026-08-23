@@ -508,7 +508,9 @@ export const CronUsageAnalyticsItemSchema = t.Object({
   costUsd: t.Number(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
-  requestCount: t.Number()
+  requestCount: t.Number(),
+  successCount: t.Number(),
+  failedCount: t.Number()
 });
 
 // ── Generation (Zod — tái dùng schema đã có trong study.service.ts) ──────────

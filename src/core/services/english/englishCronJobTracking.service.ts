@@ -650,6 +650,8 @@ export interface EnglishCronUsageItem {
   tokenIn: number;
   tokenOut: number;
   requestCount: number;
+  successCount: number;
+  failedCount: number;
 }
 
 /**
@@ -674,7 +676,9 @@ async function getUsageAnalytics(input: {
         costUsd: sum(englishCronJobModelAttempt.costUsd),
         tokenIn: sum(englishCronJobModelAttempt.tokenIn),
         tokenOut: sum(englishCronJobModelAttempt.tokenOut),
-        requestCount: count()
+        requestCount: count(),
+        successCount: sql<number>`count(*) filter (where ${englishCronJobModelAttempt.status} = 'success')`,
+        failedCount: sql<number>`count(*) filter (where ${englishCronJobModelAttempt.status} = 'failed')`
       })
       .from(englishCronJobModelAttempt)
       .where(
@@ -689,7 +693,9 @@ async function getUsageAnalytics(input: {
       costUsd: Number(row.costUsd ?? 0),
       tokenIn: Number(row.tokenIn ?? 0),
       tokenOut: Number(row.tokenOut ?? 0),
-      requestCount: row.requestCount
+      requestCount: row.requestCount,
+      successCount: Number(row.successCount ?? 0),
+      failedCount: Number(row.failedCount ?? 0)
     }));
   } catch (err) {
     const normalized = normalizeError(err);
