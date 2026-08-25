@@ -1,5 +1,5 @@
 import { t } from 'elysia';
-import { ENG_LEVELS, QUIZ_TYPES } from '@/core/services/english/questionTypes';
+import { ENG_LEVELS, QUIZ_TYPES, READING_PASSAGE_TYPES } from '@/core/services/english/questionTypes';
 import { MODEL_QUANTIZATIONS } from '@/core/db/schema/main';
 
 // TypeBox schema dùng chung ở request boundary. Xây từ source-of-truth domain
@@ -24,6 +24,9 @@ function toLiterals<const T extends readonly string[]>(values: T): ToLiteralTupl
 export const EngLevelSchema = t.Union(toLiterals(ENG_LEVELS));
 
 export const QuizTypeSchema = t.Union(toLiterals(QUIZ_TYPES));
+
+// 'daily' (mặc định, narrative) | 'academic' (expository) — xem READING_PASSAGE_TYPES.
+export const ReadingPassageTypeSchema = t.Union(toLiterals(READING_PASSAGE_TYPES));
 
 export const OptionCountSchema = t.Union([t.Literal(3), t.Literal(4), t.Literal(5)]);
 

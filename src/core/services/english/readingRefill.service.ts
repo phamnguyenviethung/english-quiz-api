@@ -12,7 +12,7 @@ import readingPassageService, {
 import topicService from './topic.service';
 import { buildRefillPlan, type RefillPlanResult } from './poolRefill.service';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
-import { ENG_LEVELS, type EngLevel } from './questionTypes';
+import { ENG_LEVELS, READING_PASSAGE_TYPES, type EngLevel, type ReadingPassageType } from './questionTypes';
 import englishCronJobTrackingService, {
   normalizeError,
   type EnglishCronRunRef
@@ -25,9 +25,9 @@ export const READING_REFILL_CHILD_QUEUE = 'english-reading-refill-child';
 
 const LOG_TAG = 'ReadingRefill';
 
-// Bucket reading chỉ 2 chiều (cefrLevel × topic) — không có quizType/optionCount như pool.
-export function readingBucketKeyOf(input: { cefrLevel: string; topicId: number | null }): string {
-  return `${input.cefrLevel}:${input.topicId ?? 'null'}`;
+// Bucket reading 3 chiều (cefrLevel × topic × type) — không có quizType/optionCount như pool.
+export function readingBucketKeyOf(input: { cefrLevel: string; topicId: number | null; type: string }): string {
+  return `${input.cefrLevel}:${input.topicId ?? 'null'}:${input.type}`;
 }
 
 // ─── Scan ─────────────────────────────────────────────────────────────────────
@@ -36,6 +36,7 @@ export interface ReadingBucketCandidate {
   cefrLevel: EngLevel;
   topicId: number | null;
   topicName: string | null;
+  type: ReadingPassageType;
   currentCount: number;
   deficiency: number;
 }
@@ -43,6 +44,7 @@ export interface ReadingBucketCandidate {
 export interface ReadingBucketFilter {
   cefrLevels?: EngLevel[];
   topicIds?: number[];
+  types?: ReadingPassageType[];
 }
 
 export interface ScanReadingBucketsOptions {
@@ -66,7 +68,7 @@ export function isReadingBucketDeficient(
 }
 
 /**
- * Quét toàn bộ bucket (topic × cefrLevel), sắp xếp giống scanBuckets của pool:
+ * Quét toàn bộ bucket (topic × cefrLevel × type), sắp xếp giống scanBuckets của pool:
  * deficiency giảm dần → lần refill thành công gần nhất tăng dần (null trước) → bucketKey.
  * Tiêu chí (2) là phần chống đói: khi 1 lần chạy bị budget-cap giữa chừng, bucket đứng
  * sau trong thứ tự cố định sẽ không bị bỏ quên mãi.
@@ -79,6 +81,7 @@ export async function scanReadingBuckets(options: ScanReadingBucketsOptions): Pr
   const filter = options.filter;
   const cefrLevelFilter = hasFilterValues(filter?.cefrLevels) ? new Set(filter.cefrLevels) : null;
   const topicIdFilter = hasFilterValues(filter?.topicIds) ? new Set(filter.topicIds) : null;
+  const typeFilter = hasFilterValues(filter?.types) ? new Set(filter.types) : null;
   const bucketKeyFilter = hasFilterValues(options.bucketKeys) ? new Set(options.bucketKeys) : null;
 
   const all: ReadingBucketCandidate[] = [];
@@ -86,17 +89,21 @@ export async function scanReadingBuckets(options: ScanReadingBucketsOptions): Pr
     if (topicIdFilter && !topicIdFilter.has(topic.id)) continue;
     for (const cefrLevel of ENG_LEVELS) {
       if (cefrLevelFilter && !cefrLevelFilter.has(cefrLevel)) continue;
-      const bucketKey = readingBucketKeyOf({ cefrLevel, topicId: topic.id });
-      if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
+      for (const type of READING_PASSAGE_TYPES) {
+        if (typeFilter && !typeFilter.has(type)) continue;
+        const bucketKey = readingBucketKeyOf({ cefrLevel, topicId: topic.id, type });
+        if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
 
-      const currentCount = countsByBucket.get(bucketKey) ?? 0;
-      all.push({
-        cefrLevel,
-        topicId: topic.id,
-        topicName: topic.name,
-        currentCount,
-        deficiency: maxPerBucket - currentCount
-      });
+        const currentCount = countsByBucket.get(bucketKey) ?? 0;
+        all.push({
+          cefrLevel,
+          topicId: topic.id,
+          topicName: topic.name,
+          type,
+          currentCount,
+          deficiency: maxPerBucket - currentCount
+        });
+      }
     }
   }
 
@@ -127,6 +134,7 @@ function toReadingGenJobData(item: ReadingRefillPlanItem, trackingRunId?: string
     cefrLevel: item.cefrLevel,
     topicId: item.topicId,
     topicName: item.topicName,
+    type: item.type,
     count: item.count,
     trackingRunId
   };
@@ -138,7 +146,7 @@ async function executeScheduledPlanAsFlow(
   trackingRun: EnglishCronRunRef | null
 ): Promise<void> {
   const children = plan.planned.map((item) => ({
-    name: `reading-${item.cefrLevel}-${item.topicId ?? 'null'}`,
+    name: `reading-${item.cefrLevel}-${item.topicId ?? 'null'}-${item.type}`,
     queueName: READING_REFILL_CHILD_QUEUE,
     data: toReadingGenJobData(item, trackingRun?.runId),
     opts: { removeOnComplete: true, removeOnFail: 50 }
@@ -186,6 +194,7 @@ async function executeManualPlanInProcess(
         cefrLevel: item.cefrLevel,
         topicId: item.topicId,
         topicName: item.topicName,
+        type: item.type,
         count: item.count,
         model: picked.model,
         provider: picked.provider,

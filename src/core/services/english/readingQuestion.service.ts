@@ -37,6 +37,7 @@ export interface ReadingQuestionRecord {
   cefrLevel: string;
   topicId: number | null;
   topicName: string | null;
+  type: string;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -62,6 +63,7 @@ export interface ListReadingQuestionsInput {
   cefrLevel?: string;
   topicId?: number;
   withoutTopic?: boolean;
+  type?: string;
   quizType?: string;
   model?: string;
   isActive?: boolean;
@@ -96,6 +98,7 @@ export interface InsertReadingQuestionInput {
   cefrLevel: EngLevel;
   topicId: number | null;
   topicName: string | null;
+  type: string;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -132,6 +135,7 @@ const SELECT_COLUMNS = {
   cefrLevel: englishReadingQuestion.cefrLevel,
   topicId: englishReadingQuestion.topicId,
   topicName: englishReadingQuestion.topicName,
+  type: englishReadingQuestion.type,
   model: englishReadingQuestion.model,
   tokenIn: englishReadingQuestion.tokenIn,
   tokenOut: englishReadingQuestion.tokenOut,
@@ -239,6 +243,7 @@ async function insertQuestions(questions: InsertReadingQuestionInput[]): Promise
         cefrLevel: question.cefrLevel,
         topicId: question.topicId,
         topicName: question.topicName,
+        type: question.type,
         model: question.model,
         tokenIn: question.tokenIn,
         tokenOut: question.tokenOut
@@ -266,6 +271,7 @@ async function listQuestions(input: ListReadingQuestionsInput): Promise<ReadingQ
   const conditions = [];
   if (input.passageId !== undefined) conditions.push(eq(englishReadingQuestion.passageRefId, input.passageId));
   if (input.cefrLevel) conditions.push(eq(englishReadingQuestion.cefrLevel, input.cefrLevel));
+  if (input.type) conditions.push(eq(englishReadingQuestion.type, input.type));
   if (input.quizType) conditions.push(eq(englishReadingQuestion.quizType, input.quizType));
   if (input.model) conditions.push(eq(englishReadingQuestion.model, input.model));
   if (input.isActive !== undefined) conditions.push(eq(englishReadingQuestion.isActive, input.isActive));
@@ -397,6 +403,7 @@ async function deleteQuestion(id: number): Promise<void> {
 async function countReadyPassages(input: {
   cefrLevel?: string;
   topicId?: number | null;
+  type?: string;
   allowedTopicIds?: number[] | null;
 }): Promise<number> {
   if (input.allowedTopicIds !== undefined && input.allowedTopicIds !== null && input.allowedTopicIds.length === 0) {
@@ -405,6 +412,7 @@ async function countReadyPassages(input: {
 
   const conditions = [eq(englishReadingPassage.isActive, true)];
   if (input.cefrLevel) conditions.push(eq(englishReadingPassage.cefrLevel, input.cefrLevel));
+  if (input.type) conditions.push(eq(englishReadingPassage.type, input.type));
   if (input.topicId !== undefined && input.topicId !== null) {
     conditions.push(eq(englishReadingPassage.topicId, input.topicId));
   } else if (input.allowedTopicIds) {
@@ -437,17 +445,20 @@ export interface PassageWithQuestions {
     cefrLevel: string;
     topicId: number | null;
     topicName: string | null;
+    type: string;
   };
   questions: ReadingQuestionRecord[];
 }
 
 /**
  * Lấy ngẫu nhiên 1 passage đã đủ câu hỏi. KHÔNG destructive (giống questionPool.popQuestion)
- * — kho dùng lại được, `excludeIds` để client tự tránh lặp trong một phiên.
+ * — kho dùng lại được, `excludeIds` để client tự tránh lặp trong một phiên. `type` là hard
+ * filter (không nới ở tầng fallback của controller) — daily/academic không bao giờ lẫn nhau.
  */
 async function popPassageWithQuestions(input: {
   cefrLevel?: string;
   topicId?: number | null;
+  type?: string;
   excludeIds?: number[];
   allowedTopicIds?: number[] | null;
 }): Promise<PassageWithQuestions | null> {
@@ -457,6 +468,7 @@ async function popPassageWithQuestions(input: {
 
   const conditions = [eq(englishReadingPassage.isActive, true)];
   if (input.cefrLevel) conditions.push(eq(englishReadingPassage.cefrLevel, input.cefrLevel));
+  if (input.type) conditions.push(eq(englishReadingPassage.type, input.type));
   if (input.topicId !== undefined && input.topicId !== null) {
     conditions.push(eq(englishReadingPassage.topicId, input.topicId));
   } else if (input.allowedTopicIds) {
@@ -481,7 +493,8 @@ async function popPassageWithQuestions(input: {
       wordCount: englishReadingPassage.wordCount,
       cefrLevel: englishReadingPassage.cefrLevel,
       topicId: englishReadingPassage.topicId,
-      topicName: englishReadingPassage.topicName
+      topicName: englishReadingPassage.topicName,
+      type: englishReadingPassage.type
     })
     .from(englishReadingPassage)
     .where(and(...conditions, inArray(englishReadingPassage.id, readyIds)))

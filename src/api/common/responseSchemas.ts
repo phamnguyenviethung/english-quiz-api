@@ -238,6 +238,7 @@ export const ReadingPassageSchema = t.Object({
   cefrLevel: t.String(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  type: t.String({ description: 'daily | academic — xem READING_PASSAGE_TYPES.' }),
   model: t.String(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
@@ -266,16 +267,18 @@ export const GeneratedReadingPassageSchema = t.Object({
     paragraphs: t.Array(t.String()),
     wordCount: t.Number(),
     topic: t.String(),
-    cefrLevel: t.String()
+    cefrLevel: t.String(),
+    type: t.String({ description: 'daily | academic — type đã dùng để chọn prompt.' })
   }),
   usage: t.Optional(t.Object({ inputTokens: t.Number(), outputTokens: t.Number(), model: t.String() }))
 });
 
 export const ReadingBucketSchema = t.Object({
-  bucketKey: t.String({ description: '`{cefrLevel}:{topicId|null}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  bucketKey: t.String({ description: '`{cefrLevel}:{topicId|null}:{type}` — id ổn định để chọn/bỏ chọn bucket.' }),
   cefrLevel: t.String(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  type: t.String({ description: 'daily | academic.' }),
   currentCount: t.Number({ description: 'Số bài đang active trong bucket.' }),
   deficiency: t.Number({ description: 'reading_passage.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
   plannedCount: t.Number({ description: 'Số bài sẽ sinh cho bucket này. 0 = bị scope bỏ qua.' })
@@ -305,6 +308,7 @@ export const ReadingQuestionRecordSchema = t.Object({
   cefrLevel: t.String(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  type: t.String({ description: 'daily | academic — snapshot từ passage lúc sinh câu hỏi.' }),
   model: t.String(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
@@ -377,7 +381,8 @@ export const ReadingWithQuestionsSchema = t.Object({
     wordCount: t.Number(),
     cefrLevel: t.String(),
     topicId: t.Nullable(t.Number()),
-    topicName: t.Nullable(t.String())
+    topicName: t.Nullable(t.String()),
+    type: t.String({ description: 'daily | academic.' })
   }),
   questions: t.Array(ReadingQuestionRecordSchema)
 });

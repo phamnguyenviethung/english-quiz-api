@@ -27,6 +27,8 @@ Rules:
 
 ## 3. Chủ đề
 
+> Guideline này (mục 1-18) mô tả variant **`daily`** (mặc định). Variant **`academic`** dùng chung mục 2 (độ dài), 11 (sentence complexity theo level) và phần lớn cấu trúc câu hỏi (5-9), nhưng đảo ngược mục 3 và 10 — xem [Academic variant](#academic-variant) ở cuối file.
+
 - Xoay quanh `topic` được input.
 - Ưu tiên tình huống cụ thể thay vì chủ đề trừu tượng.
 - Cho phép fictional scenarios.
@@ -345,3 +347,17 @@ Trước khi output:
 ## Core Principle
 
 > **Generate a natural, self-contained 150–220-word reading that is interesting on its own and contains enough clear, well-distributed information for a separate Question Generator to produce 3 independent, unambiguous, high-quality questions.**
+
+## Academic variant
+
+`type = 'academic'` (`prompt/reading-passage-prompt-academic.ts`, duplicate-và-sửa từ `prompt/reading-passage-prompt.ts`). `topic` vẫn là input y hệt variant `daily` — chỉ nội dung/văn phong khác. Sửa academic thì sửa cả 2: guideline (đoạn này) và file prompt.
+
+Khác biệt so với `daily` (mục 1-18 ở trên):
+
+- **Mục 1 (Mục tiêu)**: expository "micro-reading" (encyclopedia entry / textbook excerpt / science-magazine snippet), không phải narrative story.
+- **Mục 3 (Chủ đề)**: **đảo ngược** — chủ động giải thích khoa học/lịch sử/kỹ thuật/xã hội đúng như `topic` gọi tên, thay vì tránh. Ưu tiên fact tổng quát, đã được xác lập rộng rãi; **không** bịa số liệu/ngày tháng/tên nghiên cứu/tên người thật cụ thể — dùng cách diễn đạt an toàn ("scientists have found that...") khi cần. Không viết narrative/dialogue/personal story.
+- **Mục 4 (Nội dung) / cấu trúc**: arc đổi từ Situation → Development → Result thành **Overview → Explanation → Significance**. Information points là fact/cause/process-step/comparison/consequence thay vì character/setting/decision.
+- **Mục 10 (Vocabulary)**: **đảo ngược** — khuyến khích từ vựng academic/topic-specific thay vì tránh; target word có thể là thuật ngữ miễn nghĩa suy được từ ngữ cảnh.
+- **Mục 12 (Naturalness)**: văn phong "well-edited educational text" — trang trọng, rõ ràng, tránh textbook-cliché filler, không phải "avoid formal language" như bản daily.
+- **Mục 13 (Variety)**: câu mở tránh dùng là dạng expository-cliché ("Have you ever wondered...", "Did you know that...") thay vì narrative-cliché.
+- Mọi mục còn lại (2, 5-9, 11, 14-18) giữ nguyên tinh thần, chỉ đổi từ vựng minh hoạ (character → entity, plot → sub-topic, ...).

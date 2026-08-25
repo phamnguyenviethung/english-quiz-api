@@ -254,6 +254,7 @@ export async function fillReadingQuestionBucketDetailed(
       cefrLevel,
       topicId: passage.topicId,
       topicName: passage.topicName,
+      type: passage.type,
       model: resolved.model,
       tokenIn,
       tokenOut

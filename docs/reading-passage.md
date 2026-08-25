@@ -1,10 +1,15 @@
 # Reading Passage
 
-Bài đọc ngắn (~10 phút) sinh bằng LLM từ input `topicName` + `cefrLevel`, lưu vào kho để dùng lại.
+Bài đọc ngắn (~10 phút) sinh bằng LLM từ input `topicName` + `cefrLevel` + `type`, lưu vào kho để dùng lại.
 
 > **Đừng nhầm với `quizType = 'reading'`.** Loại quiz đó (`prompt/reading-prompt.ts`, `POST /english/generate-reading`) là **quiz đọc hiểu + mental math**, nằm trong question pool. Reading passage ở đây là **nội dung thuần, chưa có câu hỏi**, nằm ở bảng riêng và pipeline riêng. Hai feature độc lập.
 
-Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](./reading-prompt-guideline.md). Sửa guideline thì sửa `prompt/reading-passage-prompt.ts` theo.
+`type` (`READING_PASSAGE_TYPES` ở `questionTypes.ts`) có 2 giá trị:
+
+- `daily` (**mặc định**) — narrative, "micro-reading" đời thường. Prompt: `prompt/reading-passage-prompt.ts`.
+- `academic` — expository/informational, văn phong trang trọng, khuyến khích từ vựng học thuật. Prompt: `prompt/reading-passage-prompt-academic.ts` — bản duplicate-và-sửa của prompt daily.
+
+Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](./reading-prompt-guideline.md). Sửa guideline (daily hoặc academic) thì sửa file prompt tương ứng theo.
 
 ## Phạm vi hiện tại
 
@@ -22,10 +27,11 @@ Bảng `english_reading_passages`:
 | `wordCount`                    | **Đếm lại server-side** từ `paragraphs`, không tin số model trả về   |
 | `cefrLevel`                    | A1/A2/B1/B2 (dùng chung `ENG_LEVELS`)                                |
 | `topicId` / `topicName`        | FK topic + snapshot tên lúc sinh (chính là input của prompt)         |
+| `type`                         | `daily` (mặc định) / `academic` — xem `READING_PASSAGE_TYPES`. Chỉ set lúc sinh, không sửa qua PATCH |
 | `model`, `tokenIn`, `tokenOut` | Truy vết chi phí                                                     |
 | `isActive`                     | Tắt bài kém mà không xoá. Bài đã tắt **không** tính vào bucket count |
 
-**Bucket = `(cefrLevel, topicId)`** — 2 chiều, khác question pool (3 chiều, có thêm `quizType`). `bucketKey` dạng `"B1:7"`.
+**Bucket = `(cefrLevel, topicId, type)`** — 3 chiều. `bucketKey` dạng `"B1:7:daily"`. Cron auto-refill quét cả 2 type trong cùng lịch (`reading-refill-daily`) nên khối lượng sinh mỗi lần chạy tăng gấp đôi so với trước khi có `type`.
 
 Reading luôn gắn với 1 topic (prompt cần `topicName` để khoá chủ đề) — không có bucket "no topic".
 
@@ -77,7 +83,7 @@ Hai đường, cùng dùng `fillReadingBucketDetailed` (`core/cron/reading-gen.j
 
 Thứ tự quét bucket (`scanReadingBuckets`) giống question pool: `deficiency` giảm dần → lần fill thành công gần nhất tăng dần (null trước) → `bucketKey`. Tiêu chí thứ 2 là phần chống đói khi một lần chạy bị cắt giữa chừng vì trần chi phí.
 
-Tracking dùng chung bảng `english_cron_job_*`. Bảng bucket yêu cầu `quizType`/`optionCount` notNull nên reading ghi sentinel `quizType = 'reading-passage'`, `optionCount = 0` — đủ để phân biệt khi đọc lịch sử cron mà không phải đổi schema.
+Tracking dùng chung bảng `english_cron_job_*`. Bảng bucket yêu cầu `quizType`/`optionCount` notNull nên reading ghi sentinel `quizType = 'reading-passage-{type}'` (`reading-passage-daily` / `reading-passage-academic`), `optionCount = 0` — đủ để phân biệt khi đọc lịch sử cron mà không phải đổi schema.
 
 Error phase riêng: `reading_count`, `insert_readings`.
 
@@ -93,11 +99,11 @@ Toàn bộ dưới `/admin/readings`, yêu cầu session admin.
 
 | Method   | Path                       | Ghi chú                                                                                                                                                                      |
 | -------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/admin/readings`          | List + filter (`cefrLevel`, `topicId`, `withoutTopic`, `model`, `isActive`, `q`, `createdFrom/To`, `sort`, `page`, `pageSize`). `q` ILIKE trên title + nội dung đoạn + model |
+| `GET`    | `/admin/readings`          | List + filter (`cefrLevel`, `topicId`, `withoutTopic`, `type`, `model`, `isActive`, `q`, `createdFrom/To`, `sort`, `page`, `pageSize`). `q` ILIKE trên title + nội dung đoạn + model |
 | `GET`    | `/admin/readings/models`   | Model đang có bài trong kho + số lượng (đổ dropdown filter)                                                                                                                  |
-| `GET`    | `/admin/readings/buckets`  | Preview bucket sẽ sinh, dùng chung hàm plan với endpoint refill nên số liệu không lệch                                                                                       |
-| `POST`   | `/admin/readings/generate` | Sinh thử 1 bài, **KHÔNG lưu**. Model trả bài không hợp lệ → 400                                                                                                              |
-| `POST`   | `/admin/readings/refill`   | Trigger sinh hàng loạt → `{ runId, totalBuckets }`, theo dõi qua `GET /english/cron/runs/:runId`                                                                             |
+| `GET`    | `/admin/readings/buckets`  | Preview bucket sẽ sinh (filter thêm `types`, CSV), dùng chung hàm plan với endpoint refill nên số liệu không lệch                                                            |
+| `POST`   | `/admin/readings/generate` | Sinh thử 1 bài, cần chọn `type` (`daily`/`academic`), **KHÔNG lưu**. Model trả bài không hợp lệ → 400                                                                        |
+| `POST`   | `/admin/readings/refill`   | Trigger sinh hàng loạt, `filter.types` lọc theo type → `{ runId, totalBuckets }`, theo dõi qua `GET /english/cron/runs/:runId`                                               |
 | `GET`    | `/admin/readings/:id`      | Chi tiết                                                                                                                                                                     |
 | `PATCH`  | `/admin/readings/:id`      | Sửa `title`/`paragraphs`/`isActive`. Sửa `paragraphs` tự tính lại `wordCount` **và tắt toàn bộ câu hỏi của bài** (xem dưới)                                                  |
 | `DELETE` | `/admin/readings/:id`      | Xoá hẳn. Muốn giữ lại thì `PATCH { isActive: false }`                                                                                                                        |

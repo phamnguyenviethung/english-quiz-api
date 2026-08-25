@@ -22,20 +22,23 @@ import englishCronJobTrackingService, {
   type EnglishCronJobErrorPhase,
   type EnglishCronRunRef
 } from '@/core/services/english/englishCronJobTracking.service';
-import type { EngLevel } from '@/core/services/english/questionTypes';
+import type { EngLevel, ReadingPassageType } from '@/core/services/english/questionTypes';
 
 const LOG_TAG = 'ReadingRefill';
 
 // english_cron_job_buckets yêu cầu quizType/optionCount notNull. Reading không có 2 khái
-// niệm này nên dùng sentinel cố định — đủ để phân biệt bucket reading với bucket quiz khi
-// đọc lịch sử cron, mà không phải đổi schema bảng tracking.
-const READING_TRACKING_QUIZ_TYPE = 'reading-passage';
+// niệm này nên dùng sentinel cố định (kèm type) — đủ để phân biệt bucket reading (daily vs
+// academic) với bucket quiz khi đọc lịch sử cron, mà không phải đổi schema bảng tracking.
+function readingTrackingQuizType(type: ReadingPassageType): string {
+  return `reading-passage-${type}`;
+}
 const READING_TRACKING_OPTION_COUNT = 0;
 
 export interface ReadingGenJobData {
   cefrLevel: EngLevel;
   topicId: number | null;
   topicName: string | null;
+  type: ReadingPassageType;
   count: number;
   trackingRunId?: string;
 }
@@ -50,6 +53,7 @@ export interface FillReadingBucketParams {
   cefrLevel: EngLevel;
   topicId: number | null;
   topicName: string | null;
+  type: ReadingPassageType;
   count: number;
   logTag?: string;
   model?: string;
@@ -94,6 +98,7 @@ export async function fillReadingBucketDetailed(params: FillReadingBucketParams)
     cefrLevel,
     topicId,
     topicName,
+    type,
     logTag = LOG_TAG,
     model,
     provider,
@@ -104,7 +109,7 @@ export async function fillReadingBucketDetailed(params: FillReadingBucketParams)
   const requestedCount = Math.max(1, params.count);
   const bucket = await englishCronJobTrackingService.startBucket(trackingRun, {
     engLevel: cefrLevel,
-    quizType: READING_TRACKING_QUIZ_TYPE,
+    quizType: readingTrackingQuizType(type),
     optionCount: READING_TRACKING_OPTION_COUNT,
     topicId,
     topicName,
@@ -117,12 +122,12 @@ export async function fillReadingBucketDetailed(params: FillReadingBucketParams)
   try {
     if (!skipCountCheck) {
       phase = 'reading_count';
-      const currentCount = await readingPassageService.getCount(cefrLevel, topicId);
+      const currentCount = await readingPassageService.getCount(cefrLevel, topicId, type);
       const maxPerBucket = getMaxPerBucket();
       const needed = maxPerBucket - currentCount;
       if (needed <= 0) {
         logger.info(
-          `[${logTag}] Bucket already full (${currentCount}/${maxPerBucket}) cefrLevel=${cefrLevel} topicId=${topicId}, skipping`
+          `[${logTag}] Bucket already full (${currentCount}/${maxPerBucket}) cefrLevel=${cefrLevel} topicId=${topicId} type=${type}, skipping`
         );
         await englishCronJobTrackingService.finishBucket(bucket, {
           status: 'skipped',
@@ -170,13 +175,18 @@ export async function fillReadingBucketDetailed(params: FillReadingBucketParams)
     }
 
     const resolvedTopicName = topicName ?? topic.name;
-    const excludeTitles = await readingPassageService.getRecentTitles(cefrLevel, topicId, getExcludeRecentTitleCount());
+    const excludeTitles = await readingPassageService.getRecentTitles(
+      cefrLevel,
+      topicId,
+      type,
+      getExcludeRecentTitleCount()
+    );
 
     // Không chỉ định model → dùng pool model của context 'reading'.
     const resolved: ResolvedStudyModel = model ? { model, provider } : await pickStudyModelForContext('reading');
 
     logger.info(
-      `[${logTag}] Generating batch cefrLevel=${cefrLevel} topicId=${topicId} topicName=${resolvedTopicName} count=${batchCount} model=${resolved.model}`
+      `[${logTag}] Generating batch cefrLevel=${cefrLevel} topicId=${topicId} topicName=${resolvedTopicName} type=${type} count=${batchCount} model=${resolved.model}`
     );
 
     phase = 'generate_model';
@@ -188,6 +198,7 @@ export async function fillReadingBucketDetailed(params: FillReadingBucketParams)
         {
           cefrLevel,
           topicName: resolvedTopicName,
+          type,
           model: resolved.model,
           provider: resolved.provider
         },
@@ -233,6 +244,7 @@ export async function fillReadingBucketDetailed(params: FillReadingBucketParams)
       cefrLevel,
       topicId,
       topicName: resolvedTopicName,
+      type,
       model: resolved.model,
       tokenIn,
       tokenOut
@@ -318,16 +330,17 @@ function createChildWorker(): Worker<ReadingGenJobData> {
   return new Worker<ReadingGenJobData>(
     READING_REFILL_CHILD_QUEUE,
     async (job) => {
-      const { cefrLevel, topicId, topicName, count } = job.data;
+      const { cefrLevel, topicId, topicName, type, count } = job.data;
       const trackingRun = await englishCronJobTrackingService.getRunRefByRunId(job.data.trackingRunId);
       const { model, provider } = await pickStudyModelForContext('reading');
       logger.info(
-        `[${LOG_TAG}] Child processing: cefrLevel=${cefrLevel} topicId=${topicId} count=${count} model=${model}`
+        `[${LOG_TAG}] Child processing: cefrLevel=${cefrLevel} topicId=${topicId} type=${type} count=${count} model=${model}`
       );
       await fillReadingBucketDetailed({
         cefrLevel,
         topicId,
         topicName,
+        type,
         count,
         model,
         provider,

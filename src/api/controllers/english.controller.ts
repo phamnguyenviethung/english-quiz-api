@@ -32,7 +32,12 @@ import {
   resetEnglishConfigToDefault,
   type EnglishConfigChange
 } from '@/core/services/english/englishConfig.service';
-import { QUIZ_TYPES, type EngLevel, type QuizType } from '@/core/services/english/questionTypes';
+import {
+  QUIZ_TYPES,
+  type EngLevel,
+  type QuizType,
+  type ReadingPassageType
+} from '@/core/services/english/questionTypes';
 
 // ─── Generation ───────────────────────────────────────────────────────────────
 
@@ -248,12 +253,15 @@ function resolveAllowedTopicIds(tenant: TenantContext): number[] | null {
 
 async function popReading(
   tenant: TenantContext,
-  input: { cefrLevel?: EngLevel; topicId?: number; excludeIds: number[] }
+  input: { cefrLevel?: EngLevel; topicId?: number; type?: ReadingPassageType; excludeIds: number[] }
 ) {
   if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
 
   const allowedTopicIds = resolveAllowedTopicIds(tenant);
-  const base = { excludeIds: input.excludeIds, allowedTopicIds };
+  // type là hard filter: giữ nguyên xuyên suốt mọi tầng fallback bên dưới, không như
+  // topicId/cefrLevel/excludeIds — không bao giờ trả nhầm content style (daily vs academic).
+  const type = input.type ?? 'daily';
+  const base = { excludeIds: input.excludeIds, allowedTopicIds, type };
 
   let result = await readingQuestionService.popPassageWithQuestions({
     ...base,
@@ -281,22 +289,27 @@ async function popReading(
     logger.warn(
       `[popReading] Vẫn không có bài sau khi nới topic/level (excludeIds=${input.excludeIds.length} id), fallback bỏ excludeIds`
     );
-    result = await readingQuestionService.popPassageWithQuestions({ allowedTopicIds });
+    result = await readingQuestionService.popPassageWithQuestions({ allowedTopicIds, type });
   }
 
   if (!result) throw new NotFoundException('Không có bài đọc nào đã sẵn sàng (đủ câu hỏi)');
   return result;
 }
 
-async function countReadings(tenant: TenantContext, input: { cefrLevel?: EngLevel; topicId?: number }) {
+async function countReadings(
+  tenant: TenantContext,
+  input: { cefrLevel?: EngLevel; topicId?: number; type?: ReadingPassageType }
+) {
   if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
 
+  const type = input.type ?? 'daily';
   const count = await readingQuestionService.countReadyPassages({
     cefrLevel: input.cefrLevel,
     topicId: input.topicId,
+    type,
     allowedTopicIds: resolveAllowedTopicIds(tenant)
   });
-  return { cefrLevel: input.cefrLevel ?? null, topicId: input.topicId ?? null, count };
+  return { cefrLevel: input.cefrLevel ?? null, topicId: input.topicId ?? null, type, count };
 }
 
 export default {

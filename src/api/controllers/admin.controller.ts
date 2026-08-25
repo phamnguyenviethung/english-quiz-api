@@ -21,7 +21,14 @@ import readingQuestionService, {
   type ReadingQuestionsSort,
   type UpdateReadingQuestionInput
 } from '@/core/services/english/readingQuestion.service';
-import { ENG_LEVELS, QUIZ_TYPES, type EngLevel, type QuizType } from '@/core/services/english/questionTypes';
+import {
+  ENG_LEVELS,
+  QUIZ_TYPES,
+  READING_PASSAGE_TYPES,
+  type EngLevel,
+  type QuizType,
+  type ReadingPassageType
+} from '@/core/services/english/questionTypes';
 import questionPoolService from '@/core/services/english/questionPool.service';
 import { BusinessLogicException } from '@/core/exceptions';
 import studyService, { type DifficultyContext } from '@/core/services/english/study.service';
@@ -310,6 +317,7 @@ interface ListReadingsQuery {
   cefrLevel?: string;
   topicId?: number;
   withoutTopic?: boolean;
+  type?: string;
   model?: string;
   isActive?: boolean;
   createdFrom?: string;
@@ -357,6 +365,7 @@ function listReadingModels() {
 interface GenerateReadingPassageInput {
   topicName: string;
   cefrLevel: EngLevel;
+  type: ReadingPassageType;
   model?: string;
 }
 
@@ -368,9 +377,12 @@ async function generateReadingPassage(input: GenerateReadingPassageInput) {
   const ctx = await studyService.buildReadingPassageContext({
     cefrLevel: input.cefrLevel,
     topicName,
+    type: input.type,
     model: input.model
   });
-  logger.info(`[Admin] Generate reading passage preview cefrLevel=${ctx.cefrLevel} topic="${topicName}"`);
+  logger.info(
+    `[Admin] Generate reading passage preview cefrLevel=${ctx.cefrLevel} type=${ctx.type} topic="${topicName}"`
+  );
 
   const { passages, usage } = await studyService.generateReadingPassageBatch(ctx, { count: 1 });
   const passage = passages[0];
@@ -379,12 +391,13 @@ async function generateReadingPassage(input: GenerateReadingPassageInput) {
       'Model không trả về bài đọc hợp lệ (sai độ dài hoặc thiếu đoạn). Thử lại hoặc đổi model.'
     );
   }
-  return { passage, usage };
+  return { passage: { ...passage, type: ctx.type }, usage };
 }
 
 interface ReadingBucketFilterInput {
   cefrLevels?: string[];
   topicIds?: number[];
+  types?: string[];
 }
 
 function toReadingBucketFilter(input: ReadingBucketFilterInput | undefined): ReadingBucketFilter | undefined {
@@ -397,9 +410,13 @@ function toReadingBucketFilter(input: ReadingBucketFilterInput | undefined): Rea
   if (invalidTopicIds.length > 0)
     throw new BusinessLogicException(`topicId không hợp lệ: ${invalidTopicIds.join(', ')}`);
 
+  const invalidTypes = input.types?.filter((type) => !READING_PASSAGE_TYPES.includes(type as never)) ?? [];
+  if (invalidTypes.length > 0) throw new BusinessLogicException(`type không hợp lệ: ${invalidTypes.join(', ')}`);
+
   const filter: ReadingBucketFilter = {
     cefrLevels: input.cefrLevels as EngLevel[] | undefined,
-    topicIds: input.topicIds
+    topicIds: input.topicIds,
+    types: input.types as ReadingPassageType[] | undefined
   };
 
   const hasAny = Object.values(filter).some((values) => values !== undefined && values.length > 0);
@@ -409,6 +426,7 @@ function toReadingBucketFilter(input: ReadingBucketFilterInput | undefined): Rea
 interface ListReadingBucketsQuery {
   cefrLevels?: string;
   topicIds?: string;
+  types?: string;
   scope?: 'all' | 'deficient';
   countPerBucket?: number;
 }
@@ -418,7 +436,8 @@ async function listReadingBuckets(query: ListReadingBucketsQuery) {
   const topicIds = parseCsvParam(query.topicIds)?.map((id) => Number(id));
   const filter = toReadingBucketFilter({
     cefrLevels: parseCsvParam(query.cefrLevels),
-    topicIds
+    topicIds,
+    types: parseCsvParam(query.types)
   });
 
   const { matched, plan } = await readingRefillService.buildManualReadingRefillPlan({
@@ -435,6 +454,7 @@ async function listReadingBuckets(query: ListReadingBucketsQuery) {
       cefrLevel: candidate.cefrLevel,
       topicId: candidate.topicId,
       topicName: candidate.topicName,
+      type: candidate.type,
       currentCount: candidate.currentCount,
       deficiency: candidate.deficiency,
       plannedCount: plannedByKey.get(readingBucketKeyOf(candidate)) ?? 0
@@ -482,6 +502,7 @@ interface ListReadingQuestionsQuery {
   cefrLevel?: string;
   topicId?: number;
   withoutTopic?: boolean;
+  type?: string;
   quizType?: string;
   model?: string;
   isActive?: boolean;

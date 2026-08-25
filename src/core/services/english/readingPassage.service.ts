@@ -10,7 +10,7 @@ import {
 import { NotFoundException } from '@/core/exceptions';
 import { countPassageWords } from './prompt/reading-passage-prompt';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
-import type { EngLevel } from './questionTypes';
+import type { EngLevel, ReadingPassageType } from './questionTypes';
 
 export interface ReadingPassageRecord {
   id: number;
@@ -20,6 +20,7 @@ export interface ReadingPassageRecord {
   cefrLevel: string;
   topicId: number | null;
   topicName: string | null;
+  type: string;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -43,6 +44,7 @@ export interface ListReadingPassagesInput {
   cefrLevel?: string;
   topicId?: number;
   withoutTopic?: boolean;
+  type?: string;
   model?: string;
   isActive?: boolean;
   createdFrom?: string;
@@ -73,6 +75,7 @@ export interface InsertReadingPassageInput {
   cefrLevel: EngLevel;
   topicId: number | null;
   topicName: string | null;
+  type: ReadingPassageType;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -116,6 +119,7 @@ function mapRow(row: {
   cefrLevel: string;
   topicId: number | null;
   topicName: string | null;
+  type: string;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -127,25 +131,26 @@ function mapRow(row: {
 }
 
 /**
- * Count của MỌI bucket trong 1 query, key = `${cefrLevel}:${topicId ?? 'null'}` (khớp
- * readingBucketKeyOf ở readingRefill.service). Chỉ đếm bài đang active — bài đã tắt
- * không phục vụ được nên không tính là "đã có".
+ * Count của MỌI bucket trong 1 query, key = `${cefrLevel}:${topicId ?? 'null'}:${type}`
+ * (khớp readingBucketKeyOf ở readingRefill.service). Chỉ đếm bài đang active — bài đã
+ * tắt không phục vụ được nên không tính là "đã có".
  */
 async function getCountsByBucket(): Promise<Map<string, number>> {
   const rows = await db
     .select({
       cefrLevel: englishReadingPassage.cefrLevel,
       topicId: englishReadingPassage.topicId,
+      type: englishReadingPassage.type,
       total: count()
     })
     .from(englishReadingPassage)
     .where(eq(englishReadingPassage.isActive, true))
-    .groupBy(englishReadingPassage.cefrLevel, englishReadingPassage.topicId);
+    .groupBy(englishReadingPassage.cefrLevel, englishReadingPassage.topicId, englishReadingPassage.type);
 
-  return new Map(rows.map((row) => [`${row.cefrLevel}:${row.topicId ?? 'null'}`, row.total]));
+  return new Map(rows.map((row) => [`${row.cefrLevel}:${row.topicId ?? 'null'}:${row.type}`, row.total]));
 }
 
-async function getCount(cefrLevel: string, topicId: number | null = null): Promise<number> {
+async function getCount(cefrLevel: string, topicId: number | null, type: string): Promise<number> {
   const [result] = await db
     .select({ total: count() })
     .from(englishReadingPassage)
@@ -153,6 +158,7 @@ async function getCount(cefrLevel: string, topicId: number | null = null): Promi
       and(
         eq(englishReadingPassage.cefrLevel, cefrLevel),
         buildTopicCondition(topicId),
+        eq(englishReadingPassage.type, type),
         eq(englishReadingPassage.isActive, true)
       )
     );
@@ -160,12 +166,23 @@ async function getCount(cefrLevel: string, topicId: number | null = null): Promi
 }
 
 /** Title các bài gần nhất trong bucket — feed vào prompt để model không lặp plot. */
-async function getRecentTitles(cefrLevel: string, topicId: number | null, limit: number): Promise<string[]> {
+async function getRecentTitles(
+  cefrLevel: string,
+  topicId: number | null,
+  type: string,
+  limit: number
+): Promise<string[]> {
   if (limit <= 0) return [];
   const rows = await db
     .select({ title: englishReadingPassage.title })
     .from(englishReadingPassage)
-    .where(and(eq(englishReadingPassage.cefrLevel, cefrLevel), buildTopicCondition(topicId)))
+    .where(
+      and(
+        eq(englishReadingPassage.cefrLevel, cefrLevel),
+        buildTopicCondition(topicId),
+        eq(englishReadingPassage.type, type)
+      )
+    )
     .orderBy(desc(englishReadingPassage.id))
     .limit(limit);
   return rows.map((row) => row.title);
@@ -188,6 +205,7 @@ const SELECT_COLUMNS = {
   cefrLevel: englishReadingPassage.cefrLevel,
   topicId: englishReadingPassage.topicId,
   topicName: englishReadingPassage.topicName,
+  type: englishReadingPassage.type,
   model: englishReadingPassage.model,
   tokenIn: englishReadingPassage.tokenIn,
   tokenOut: englishReadingPassage.tokenOut,
@@ -209,6 +227,7 @@ async function listPassages(input: ListReadingPassagesInput): Promise<ReadingPas
 
   const conditions = [];
   if (input.cefrLevel) conditions.push(eq(englishReadingPassage.cefrLevel, input.cefrLevel));
+  if (input.type) conditions.push(eq(englishReadingPassage.type, input.type));
   if (input.model) conditions.push(eq(englishReadingPassage.model, input.model));
   if (input.isActive !== undefined) conditions.push(eq(englishReadingPassage.isActive, input.isActive));
   if (input.withoutTopic) conditions.push(buildTopicCondition(null));
@@ -283,12 +302,12 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
   if (passages.length === 0) return 0;
 
   const inserted = await db.transaction(async (tx) => {
-    const bucketKeys = [...new Set(passages.map((p) => `${p.cefrLevel}:${p.topicId ?? 'null'}`))];
+    const bucketKeys = [...new Set(passages.map((p) => `${p.cefrLevel}:${p.topicId ?? 'null'}:${p.type}`))];
     const bucketCounts = new Map<string, number>();
     let insertedCount = 0;
 
     for (const key of bucketKeys) {
-      const [cefrLevel, topicIdStr] = key.split(':');
+      const [cefrLevel, topicIdStr, type] = key.split(':');
       const topicId = topicIdStr === 'null' ? null : Number(topicIdStr);
       const [result] = await tx
         .select({ total: count() })
@@ -297,6 +316,7 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
           and(
             eq(englishReadingPassage.cefrLevel, cefrLevel!),
             buildTopicCondition(topicId),
+            eq(englishReadingPassage.type, type!),
             eq(englishReadingPassage.isActive, true)
           )
         );
@@ -305,12 +325,12 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
 
     const maxPerBucket = getMaxPerBucket();
     for (const passage of passages) {
-      const key = `${passage.cefrLevel}:${passage.topicId ?? 'null'}`;
+      const key = `${passage.cefrLevel}:${passage.topicId ?? 'null'}:${passage.type}`;
       const currentCount = bucketCounts.get(key) ?? 0;
 
       if (currentCount >= maxPerBucket) {
         logger.info(
-          `[ReadingPassage] Bucket full (${currentCount}/${maxPerBucket}) for cefrLevel=${passage.cefrLevel} topicId=${passage.topicId}, skipping`
+          `[ReadingPassage] Bucket full (${currentCount}/${maxPerBucket}) for cefrLevel=${passage.cefrLevel} topicId=${passage.topicId} type=${passage.type}, skipping`
         );
         continue;
       }
@@ -322,6 +342,7 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
         cefrLevel: passage.cefrLevel,
         topicId: passage.topicId,
         topicName: passage.topicName,
+        type: passage.type,
         model: passage.model,
         tokenIn: passage.tokenIn,
         tokenOut: passage.tokenOut

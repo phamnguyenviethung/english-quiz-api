@@ -1,6 +1,12 @@
 import { Elysia, t } from 'elysia';
 import { ok, created, list } from '@/api/common/response';
-import { EngLevelSchema, IdParam, ProviderPreferencesSchema, QuizTypeSchema } from '@/api/common/schemas';
+import {
+  EngLevelSchema,
+  IdParam,
+  ProviderPreferencesSchema,
+  QuizTypeSchema,
+  ReadingPassageTypeSchema
+} from '@/api/common/schemas';
 import {
   ApiOk,
   ApiList,
@@ -513,6 +519,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       cefrLevel: t.Optional(EngLevelSchema),
       topicId: t.Optional(t.Numeric()),
       withoutTopic: t.Optional(t.BooleanString()),
+      type: t.Optional(ReadingPassageTypeSchema),
       model: t.Optional(t.String()),
       isActive: t.Optional(t.BooleanString()),
       createdFrom: t.Optional(t.String({ format: 'date-time' })),
@@ -537,8 +544,8 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       description:
         'Danh sách bài đọc trong kho, có filter + phân trang (mặc định pageSize 20, tối đa 100, sort id_desc). ' +
         'Mọi filter đều optional. `withoutTopic=true` lọc riêng bucket không topic và thắng `topicId` nếu truyền ' +
-        'cả hai. `q` tìm ILIKE trên title, nội dung các đoạn và tên model; `q` toàn số thì thêm điều kiện khớp ' +
-        `chính xác \`id\`. ${ADMIN_AUTH_DESCRIPTION}`,
+        'cả hai. `type` lọc daily/academic. `q` tìm ILIKE trên title, nội dung các đoạn và tên model; `q` toàn ' +
+        `số thì thêm điều kiện khớp chính xác \`id\`. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -564,6 +571,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
     query: t.Object({
       cefrLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`. Bỏ trống = mọi trình độ.' })),
       topicIds: t.Optional(t.String({ description: 'CSV topic id, vd `3,7,12`. Bỏ trống = mọi topic đang bật.' })),
+      types: t.Optional(t.String({ description: 'CSV, vd `daily,academic`. Bỏ trống = cả 2 type.' })),
       scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
       countPerBucket: t.Optional(t.Numeric({ minimum: 1 }))
     }),
@@ -588,6 +596,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
     body: t.Object({
       topicName: t.String({ minLength: 1, description: 'Chủ đề bài đọc, đưa thẳng vào TOPIC LOCK của prompt.' }),
       cefrLevel: EngLevelSchema,
+      type: ReadingPassageTypeSchema,
       model: t.Optional(
         t.String({ description: 'OpenRouter model id. Bỏ trống → random trong pool `readingEnabled`.' })
       )
@@ -597,7 +606,8 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       summary: 'Generate a reading passage (preview only)',
       description:
         'Sinh thử 1 bài đọc để kiểm tra prompt/model. **KHÔNG lưu vào kho** — dùng POST /admin/readings/refill nếu ' +
-        'muốn sinh và lưu. Độ dài bám theo band CEFR trong reading-prompt-guideline.md; model trả bài không hợp lệ ' +
+        'muốn sinh và lưu. `type` chọn prompt daily (narrative) hay academic (expository) — xem ' +
+        'reading-prompt-guideline.md. Độ dài bám theo band CEFR; model trả bài không hợp lệ ' +
         `(sai độ dài, thiếu đoạn) trả 400. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },
@@ -628,7 +638,8 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
         t.Object(
           {
             cefrLevels: t.Optional(t.Array(EngLevelSchema)),
-            topicIds: t.Optional(t.Array(t.Integer()))
+            topicIds: t.Optional(t.Array(t.Integer())),
+            types: t.Optional(t.Array(ReadingPassageTypeSchema))
           },
           { description: 'Thu hẹp không gian bucket. Chiều nào bỏ trống thì không lọc theo chiều đó.' }
         )
@@ -721,6 +732,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       cefrLevel: t.Optional(EngLevelSchema),
       topicId: t.Optional(t.Numeric()),
       withoutTopic: t.Optional(t.BooleanString({ description: 'true = chỉ câu không gắn topic. Thắng `topicId`.' })),
+      type: t.Optional(ReadingPassageTypeSchema),
       quizType: t.Optional(t.String({ description: 'detail / inference / vocabulary_context / ...' })),
       model: t.Optional(t.String()),
       isActive: t.Optional(t.BooleanString()),

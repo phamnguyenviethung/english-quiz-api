@@ -24,7 +24,7 @@ Bảng `english_reading_questions`:
 | `options`                             | `jsonb` — đúng 4 đáp án                                                    |
 | `correctAnswer`                       | **Index 0-based** vào `options`, không phải chữ cái, không phải nội dung   |
 | `explanation`                         | 1 câu tiếng Việt, trỏ tới đoạn chứa evidence                               |
-| `cefrLevel` / `topicId` / `topicName` | Snapshot từ passage để list/filter không phải join                         |
+| `cefrLevel` / `topicId` / `topicName` / `type` | Snapshot từ passage để list/filter không phải join                |
 | `model`, `tokenIn`, `tokenOut`        | Truy vết chi phí (token của cả batch, lặp trên mỗi dòng)                   |
 | `isActive`                            | Tắt câu kém mà không xoá. Câu đã tắt **không** tính là "bài đã có câu hỏi" |
 
@@ -34,11 +34,11 @@ Cột thêm vào `english_reading_passages`: `questionGenAttempts` — xem [Ch�
 
 Đây là **khác biệt cấu trúc lớn nhất** so với 2 pipeline kia:
 
-| Pipeline             | Bucket                          | `bucketKey`  |
-| -------------------- | ------------------------------- | ------------ |
-| Question pool        | `(engLevel, quizType, topicId)` | `B1:7:vocab` |
-| Reading passage      | `(cefrLevel, topicId)`          | `B1:7`       |
-| **Reading question** | **1 passage**                   | **`rq:42`**  |
+| Pipeline             | Bucket                           | `bucketKey`   |
+| -------------------- | --------------------------------- | ------------- |
+| Question pool        | `(engLevel, quizType, topicId)`  | `B1:7:vocab`  |
+| Reading passage      | `(cefrLevel, topicId, type)`     | `B1:7:daily`  |
+| **Reading question** | **1 passage**                    | **`rq:42`**   |
 
 Một bài hoặc đã đủ `questionsPerPassage` câu, hoặc chưa — không có khái niệm "bucket 3 chiều" ở đây.
 
@@ -215,7 +215,7 @@ Không tách context riêng vì sẽ kéo theo cột `readingQuestionEnabled` tr
 
 | Method   | Path                                | Ghi chú                                                                                                                       |
 | -------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/admin/reading-questions`          | List + filter (`passageId`, `cefrLevel`, `topicId`, `quizType`, `model`, `isActive`, `q`, `sort`, `page`, `pageSize`)         |
+| `GET`    | `/admin/reading-questions`          | List + filter (`passageId`, `cefrLevel`, `topicId`, `type`, `quizType`, `model`, `isActive`, `q`, `sort`, `page`, `pageSize`) |
 | `GET`    | `/admin/reading-questions/models`   | Model đang có câu trong kho + số lượng                                                                                        |
 | `GET`    | `/admin/reading-questions/buckets`  | Preview bài sẽ sinh, dùng chung hàm plan với endpoint refill nên số liệu không lệch                                           |
 | `POST`   | `/admin/reading-questions/generate` | Sinh thử trọn bộ cho 1 bài, **KHÔNG lưu**. Batch bị reject → 400                                                              |
@@ -231,18 +231,20 @@ Tắt hoặc xoá câu làm bài trở thành "thiếu câu" và sẽ được c
 | Method | Path                      | Ghi chú                                                                               |
 | ------ | ------------------------- | -------------------------------------------------------------------------------------- |
 | `GET`  | `/english/readings/pop`   | 1 bài random kèm trọn bộ câu hỏi. Không destructive. Có fallback nới bucket, xem dưới |
-| `GET`  | `/english/readings/count` | Số bài đã sẵn sàng theo `cefrLevel` / `topicId`                                        |
+| `GET`  | `/english/readings/count` | Số bài đã sẵn sàng theo `cefrLevel` / `topicId` / `type`                               |
 
 Chỉ trả bài đã **đủ** `questionsPerPassage` câu active — bài nửa vời không bao giờ được phục vụ.
 
-**Fallback khi đúng bucket không có bài:** `/pop` không trả 404 ngay khi thiếu bài đúng `topicId` + `cefrLevel` yêu cầu, mà nới dần điều kiện (mỗi bước vẫn tôn trọng allow-list topic của tenant):
+Cả 2 endpoint nhận thêm `type` (`daily` | `academic`, bỏ trống = `daily` — client cũ không đổi hành vi).
 
-1. Đúng bucket: `topicId` + `cefrLevel` như request.
-2. Nếu request có truyền `topicId` mà (1) rỗng: bỏ ràng buộc `topicId`, giữ `cefrLevel` → topic khác cùng level.
-3. Nếu request có truyền `cefrLevel` mà (2) (hoặc (1) nếu không có `topicId`) vẫn rỗng: bỏ luôn `cefrLevel` → bài bất kỳ trong phạm vi tenant được phép.
-4. Nếu request có truyền `excludeIds` mà (3) vẫn rỗng (pool sẵn sàng nhỏ hơn số id client đã loại): bỏ luôn `excludeIds` — chấp nhận trả lại bài đã thấy còn hơn báo lỗi.
+**Fallback khi đúng bucket không có bài:** `/pop` không trả 404 ngay khi thiếu bài đúng `topicId` + `cefrLevel` yêu cầu, mà nới dần điều kiện (mỗi bước vẫn tôn trọng allow-list topic của tenant). `type` là **hard filter** — không nới ở bất kỳ bước nào, để không bao giờ trả nhầm content style (daily ↔ academic):
 
-Chỉ thật sự 404 khi cả 3 bước trên đều rỗng (tenant không còn bài đọc nào sẵn sàng).
+1. Đúng bucket: `topicId` + `cefrLevel` + `type` như request.
+2. Nếu request có truyền `topicId` mà (1) rỗng: bỏ ràng buộc `topicId`, giữ `cefrLevel` + `type` → topic khác cùng level, cùng type.
+3. Nếu request có truyền `cefrLevel` mà (2) (hoặc (1) nếu không có `topicId`) vẫn rỗng: bỏ luôn `cefrLevel`, giữ `type` → bài bất kỳ level trong phạm vi tenant được phép, cùng type.
+4. Nếu request có truyền `excludeIds` mà (3) vẫn rỗng (pool sẵn sàng nhỏ hơn số id client đã loại): bỏ luôn `excludeIds`, vẫn giữ `type` — chấp nhận trả lại bài đã thấy còn hơn báo lỗi.
+
+Chỉ thật sự 404 khi cả 3 bước trên đều rỗng (tenant không còn bài đọc nào sẵn sàng cho đúng `type` đó).
 
 **Lưu ý bảo mật:** bài đọc luôn gắn topic (không có bucket no-topic như question pool), nên "không truyền `topicId`" nghĩa là _mọi topic_. `assertTopicAllowed(tenant, null)` một mình **không đủ** để chặn — service nhận thêm `allowedTopicIds` và bó truy vấn theo allow-list của tenant. Tenant không được cấp topic nào thì `/pop` trả 404 và `/count` trả 0.
 

@@ -1,10 +1,7 @@
-# CLAUDE.md
+# Plan Mode Guideline
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-# English Quiz API
-
-**Quiz Infra** — service hạ tầng quản lý quiz tiếng Anh qua HTTP API: sinh câu hỏi bằng LLM, question pool (pre-generate), config runtime, topic, và cron tracking.
+- Không cần chạy lệnh migration Database
+- Không cần tạo file SQL migration
 
 ## Techstacks
 

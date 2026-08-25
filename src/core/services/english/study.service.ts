@@ -21,6 +21,10 @@ import {
   READING_WORD_ACCEPT,
   type ReadingPassage
 } from './prompt/reading-passage-prompt';
+import {
+  buildAcademicReadingPassagePrompt,
+  ACADEMIC_READING_WORD_ACCEPT
+} from './prompt/reading-passage-prompt-academic';
 import { buildReadingQuestionPrompt, OPTIONS_PER_QUESTION, type ReadingQuestionDraft } from './prompt/reading-question';
 import { READING_QUESTION_TYPES, selectQuestionTypes, type ReadingQuestionType } from './readingQuestionTypes';
 import { buildParagraphPrompt, type ParagraphQuestion } from './prompt/paragraph-prompt';
@@ -30,7 +34,7 @@ import { buildSynonymPrompt, type SynonymQuestion } from './prompt/synonym-promp
 import { buildVocabPrompt, type DifficultyContext, type VocabQuestion } from './prompt/vocab-prompt';
 import { buildIdiomPrompt, type IdiomQuestion } from './prompt/idiom-prompt';
 import { buildVerbUseMatchPrompt, type VerbUseMatchQuestion } from './prompt/verb-use-match-prompt';
-import { ENG_LEVELS, type EngLevel, type QuizType } from './questionTypes';
+import { ENG_LEVELS, type EngLevel, type QuizType, type ReadingPassageType } from './questionTypes';
 import { BusinessLogicException } from '@/core/exceptions';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
@@ -245,6 +249,7 @@ export interface BatchGenerateOptions {
 export interface ReadingPassageContext {
   cefrLevel: EngLevel;
   topicName: string;
+  type: ReadingPassageType;
   model: string;
   provider?: ProviderPreferencesJson;
 }
@@ -488,10 +493,14 @@ function normalizeReadingPassage(raw: ReadingPassage, ctx: ReadingPassageContext
   };
 }
 
-function isValidReadingPassage(passage: ReadingPassage, excludeTitles: string[]): boolean {
+function isValidReadingPassage(
+  passage: ReadingPassage,
+  excludeTitles: string[],
+  acceptBand: { min: number; max: number }
+): boolean {
   if (!passage.title || passage.paragraphs.length < 2) return false;
 
-  if (passage.wordCount < READING_WORD_ACCEPT.min || passage.wordCount > READING_WORD_ACCEPT.max) return false;
+  if (passage.wordCount < acceptBand.min || passage.wordCount > acceptBand.max) return false;
 
   const normalizedTitle = passage.title.toLowerCase();
   return !excludeTitles.some((title) => title.trim().toLowerCase() === normalizedTitle);
@@ -1312,15 +1321,24 @@ class StudyService {
   ): Promise<{ passages: ReadingPassage[]; usage?: StructuredOutputUsage }> {
     const { count, excludeTitles = [] } = opts;
     logger.info(
-      `[StudyService] Batch generating ${count} reading passage(s) (cefrLevel=${ctx.cefrLevel} topic=${ctx.topicName})`
+      `[StudyService] Batch generating ${count} reading passage(s) (cefrLevel=${ctx.cefrLevel} topic=${ctx.topicName} type=${ctx.type})`
     );
 
-    const systemInstruction = buildReadingPassagePrompt({
-      topicName: ctx.topicName,
-      cefrLevel: ctx.cefrLevel,
-      count,
-      excludeTitles
-    });
+    const systemInstruction =
+      ctx.type === 'academic'
+        ? buildAcademicReadingPassagePrompt({
+            topicName: ctx.topicName,
+            cefrLevel: ctx.cefrLevel,
+            count,
+            excludeTitles
+          })
+        : buildReadingPassagePrompt({
+            topicName: ctx.topicName,
+            cefrLevel: ctx.cefrLevel,
+            count,
+            excludeTitles
+          });
+    const acceptBand = ctx.type === 'academic' ? ACADEMIC_READING_WORD_ACCEPT : READING_WORD_ACCEPT;
 
     const { data, usage } = await generateStructuredOutput(ReadingPassageBatchSchema, {
       model: ctx.model,
@@ -1337,7 +1355,7 @@ class StudyService {
 
     const valid = data.passages
       .map((passage) => normalizeReadingPassage(passage, ctx))
-      .filter((passage) => isValidReadingPassage(passage, excludeTitles));
+      .filter((passage) => isValidReadingPassage(passage, excludeTitles, acceptBand));
 
     logger.info(`[StudyService] Reading passage batch: ${valid.length}/${count} valid`);
     return { passages: valid, usage };
@@ -1466,12 +1484,14 @@ class StudyService {
   async buildReadingPassageContext(input: {
     cefrLevel: EngLevel;
     topicName: string;
+    type: ReadingPassageType;
     model?: string;
   }): Promise<ReadingPassageContext> {
     const resolved = await resolveStudyModel('reading', input.model);
     return {
       cefrLevel: input.cefrLevel,
       topicName: input.topicName,
+      type: input.type,
       model: resolved.model,
       provider: resolved.provider
     };

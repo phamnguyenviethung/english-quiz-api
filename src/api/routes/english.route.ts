@@ -1,6 +1,12 @@
 import { Elysia, t } from 'elysia';
 import { ok, created } from '@/api/common/response';
-import { EngLevelSchema, QuizTypeSchema, OptionCountSchema, PoolOptionCountSchema } from '@/api/common/schemas';
+import {
+  EngLevelSchema,
+  QuizTypeSchema,
+  OptionCountSchema,
+  PoolOptionCountSchema,
+  ReadingPassageTypeSchema
+} from '@/api/common/schemas';
 import {
   ApiOk,
   ApiErrorSchema,
@@ -393,6 +399,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
         await englishController.popReading(tenant, {
           cefrLevel: query.cefrLevel,
           topicId: query.topicId,
+          type: query.type,
           excludeIds: englishController.parseExcludeIds(query.excludeIds)
         })
       ),
@@ -401,6 +408,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       query: t.Object({
         cefrLevel: t.Optional(EngLevelSchema),
         topicId: t.Optional(t.Numeric()),
+        type: t.Optional(ReadingPassageTypeSchema),
         excludeIds: t.Optional(
           t.String({
             description:
@@ -416,7 +424,9 @@ export const englishRoute = new Elysia({ prefix: '/english' })
           '`reading_question.questionsPerPassage` câu đang active — bài nửa vời không bao giờ được phục vụ. ' +
           'Bài KHÔNG bị xoá, kho dùng lại được. Bỏ trống `topicId` = mọi topic tenant được cấp (bài đọc luôn ' +
           'gắn topic nên tenant bị giới hạn sẽ chỉ thấy topic trong allow-list). `topicId` ngoài allow-list ' +
-          'trả 403. Không có bài nào sẵn sàng trả 404.',
+          'trả 403. Bỏ trống `type` = "daily" (không đổi hành vi với client cũ). `type` là hard filter xuyên ' +
+          'suốt fallback (topicId → cefrLevel → excludeIds) — không bao giờ trả nhầm content style. ' +
+          'Không có bài nào sẵn sàng trả 404.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -431,23 +441,37 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   .get(
     '/readings/count',
     async ({ query, tenant }) =>
-      ok(await englishController.countReadings(tenant, { cefrLevel: query.cefrLevel, topicId: query.topicId })),
+      ok(
+        await englishController.countReadings(tenant, {
+          cefrLevel: query.cefrLevel,
+          topicId: query.topicId,
+          type: query.type
+        })
+      ),
     {
       auth: true,
       query: t.Object({
         cefrLevel: t.Optional(EngLevelSchema),
-        topicId: t.Optional(t.Numeric())
+        topicId: t.Optional(t.Numeric()),
+        type: t.Optional(ReadingPassageTypeSchema)
       }),
       detail: {
         tags: ['English / Readings'],
         summary: 'Count ready reading passages',
         description:
           'Số bài đọc đã sẵn sàng phục vụ (active và đủ câu hỏi) trong phạm vi filter. Áp dụng cùng allow-list ' +
-          'topic như /readings/pop.',
+          'topic như /readings/pop. Bỏ trống `type` = "daily".',
         security: [{ bearerAuth: [] }]
       },
       response: {
-        200: ApiOk(t.Object({ cefrLevel: t.Nullable(t.String()), topicId: t.Nullable(t.Number()), count: t.Number() })),
+        200: ApiOk(
+          t.Object({
+            cefrLevel: t.Nullable(t.String()),
+            topicId: t.Nullable(t.Number()),
+            type: t.String(),
+            count: t.Number()
+          })
+        ),
         400: ApiErrorSchema,
         403: ApiErrorSchema,
         ...COMMON_ERRORS

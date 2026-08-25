@@ -84,9 +84,9 @@ export type EnglishQuestionPool = typeof englishQuestionPool.$inferSelect;
 export type InsertEnglishQuestionPool = typeof englishQuestionPool.$inferInsert;
 
 // ----------------------------------------------------------------------------
-// Reading passages — bài đọc ngắn sinh bằng LLM từ (topicName, cefrLevel).
+// Reading passages — bài đọc ngắn sinh bằng LLM từ (topicName, cefrLevel, type).
 // KHÁC hẳn quizType 'reading' (quiz đọc hiểu + mental math) ở english_question_pool:
-// đây là nội dung thuần, chưa có câu hỏi. Bucket 2 chiều (cefrLevel, topicId).
+// đây là nội dung thuần, chưa có câu hỏi. Bucket 3 chiều (cefrLevel, topicId, type).
 // ----------------------------------------------------------------------------
 
 export const englishReadingPassage = pgTable(
@@ -101,6 +101,8 @@ export const englishReadingPassage = pgTable(
     topicId: integer().references(() => englishTopic.id),
     // Snapshot tên topic lúc sinh — chính là input đã đưa vào prompt.
     topicName: text(),
+    // 'daily' (mặc định, narrative) | 'academic' (expository) — xem READING_PASSAGE_TYPES.
+    type: text().default('daily').notNull(),
     model: text().notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
@@ -113,7 +115,7 @@ export const englishReadingPassage = pgTable(
     updatedAt: timestamp().defaultNow()
   },
   (t) => [
-    index('idx_reading_passages_bucket').on(t.cefrLevel, t.topicId),
+    index('idx_reading_passages_bucket').on(t.cefrLevel, t.topicId, t.type),
     index('idx_reading_passages_created_at').on(t.createdAt)
   ]
 );
@@ -145,6 +147,8 @@ export const englishReadingQuestion = pgTable(
     cefrLevel: text().notNull(),
     topicId: integer().references(() => englishTopic.id),
     topicName: text(),
+    // Snapshot từ passage.type — xem englishReadingPassage.type.
+    type: text().default('daily').notNull(),
     model: text().notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
@@ -154,7 +158,7 @@ export const englishReadingQuestion = pgTable(
   },
   (t) => [
     index('idx_reading_questions_passage').on(t.passageRefId),
-    index('idx_reading_questions_bucket').on(t.cefrLevel, t.topicId),
+    index('idx_reading_questions_bucket').on(t.cefrLevel, t.topicId, t.type),
     index('idx_reading_questions_created_at').on(t.createdAt)
   ]
 );
