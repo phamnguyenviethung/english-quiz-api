@@ -198,12 +198,17 @@ function resetConfig(recordKey: string) {
 
 // ─── Topics ───────────────────────────────────────────────────────────────────
 
-function listTopics() {
-  return topicService.getAllActiveTopics();
+async function listTopics(tenant: TenantContext) {
+  const topics = await topicService.getAllActiveTopics();
+  if (tenant.allowAllTopics) return topics;
+  return topics.filter((t) => tenant.allowedTopicIds.includes(t.id));
 }
 
-function randomTopicPairs(pairCount: number) {
-  return topicService.getRandomTopicPairs(pairCount, []);
+async function randomTopicPairs(tenant: TenantContext, pairCount: number) {
+  if (tenant.allowAllTopics) return topicService.getRandomTopicPairs(pairCount, []);
+  const topics = await topicService.getAllActiveTopics();
+  const allowed = topics.filter((t) => tenant.allowedTopicIds.includes(t.id));
+  return topicService.getRandomTopicPairsFromPool(allowed, pairCount);
 }
 
 function createTopic(name: string, description?: string) {

@@ -20,16 +20,16 @@ Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](./reading-prompt-g
 
 Bảng `english_reading_passages`:
 
-| Cột                            | Ghi chú                                                              |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `title`                        | Tiêu đề ngắn do model đặt                                            |
-| `paragraphs`                   | `jsonb` mảng đoạn văn theo đúng thứ tự đọc                           |
-| `wordCount`                    | **Đếm lại server-side** từ `paragraphs`, không tin số model trả về   |
-| `cefrLevel`                    | A1/A2/B1/B2 (dùng chung `ENG_LEVELS`)                                |
-| `topicId` / `topicName`        | FK topic + snapshot tên lúc sinh (chính là input của prompt)         |
+| Cột                            | Ghi chú                                                                                              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `title`                        | Tiêu đề ngắn do model đặt                                                                            |
+| `paragraphs`                   | `jsonb` mảng đoạn văn theo đúng thứ tự đọc                                                           |
+| `wordCount`                    | **Đếm lại server-side** từ `paragraphs`, không tin số model trả về                                   |
+| `cefrLevel`                    | A1/A2/B1/B2 (dùng chung `ENG_LEVELS`)                                                                |
+| `topicId` / `topicName`        | FK topic + snapshot tên lúc sinh (chính là input của prompt)                                         |
 | `type`                         | `daily` (mặc định) / `academic` — xem `READING_PASSAGE_TYPES`. Chỉ set lúc sinh, không sửa qua PATCH |
-| `model`, `tokenIn`, `tokenOut` | Truy vết chi phí                                                     |
-| `isActive`                     | Tắt bài kém mà không xoá. Bài đã tắt **không** tính vào bucket count |
+| `model`, `tokenIn`, `tokenOut` | Truy vết chi phí                                                                                     |
+| `isActive`                     | Tắt bài kém mà không xoá. Bài đã tắt **không** tính vào bucket count                                 |
 
 **Bucket = `(cefrLevel, topicId, type)`** — 3 chiều. `bucketKey` dạng `"B1:7:daily"`. Cron auto-refill quét cả 2 type trong cùng lịch (`reading-refill-daily`) nên khối lượng sinh mỗi lần chạy tăng gấp đôi so với trước khi có `type`.
 
@@ -97,16 +97,16 @@ Provider routing của context reading lưu **normalize** ở 2 bảng riêng, x
 
 Toàn bộ dưới `/admin/readings`, yêu cầu session admin.
 
-| Method   | Path                       | Ghi chú                                                                                                                                                                      |
-| -------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Method   | Path                       | Ghi chú                                                                                                                                                                              |
+| -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `GET`    | `/admin/readings`          | List + filter (`cefrLevel`, `topicId`, `withoutTopic`, `type`, `model`, `isActive`, `q`, `createdFrom/To`, `sort`, `page`, `pageSize`). `q` ILIKE trên title + nội dung đoạn + model |
-| `GET`    | `/admin/readings/models`   | Model đang có bài trong kho + số lượng (đổ dropdown filter)                                                                                                                  |
-| `GET`    | `/admin/readings/buckets`  | Preview bucket sẽ sinh (filter thêm `types`, CSV), dùng chung hàm plan với endpoint refill nên số liệu không lệch                                                            |
-| `POST`   | `/admin/readings/generate` | Sinh thử 1 bài, cần chọn `type` (`daily`/`academic`), **KHÔNG lưu**. Model trả bài không hợp lệ → 400                                                                        |
-| `POST`   | `/admin/readings/refill`   | Trigger sinh hàng loạt, `filter.types` lọc theo type → `{ runId, totalBuckets }`, theo dõi qua `GET /english/cron/runs/:runId`                                               |
-| `GET`    | `/admin/readings/:id`      | Chi tiết                                                                                                                                                                     |
-| `PATCH`  | `/admin/readings/:id`      | Sửa `title`/`paragraphs`/`isActive`. Sửa `paragraphs` tự tính lại `wordCount` **và tắt toàn bộ câu hỏi của bài** (xem dưới)                                                  |
-| `DELETE` | `/admin/readings/:id`      | Xoá hẳn. Muốn giữ lại thì `PATCH { isActive: false }`                                                                                                                        |
+| `GET`    | `/admin/readings/models`   | Model đang có bài trong kho + số lượng (đổ dropdown filter)                                                                                                                          |
+| `GET`    | `/admin/readings/buckets`  | Preview bucket sẽ sinh (filter thêm `types`, CSV), dùng chung hàm plan với endpoint refill nên số liệu không lệch                                                                    |
+| `POST`   | `/admin/readings/generate` | Sinh thử 1 bài, cần chọn `type` (`daily`/`academic`), **KHÔNG lưu**. Model trả bài không hợp lệ → 400                                                                                |
+| `POST`   | `/admin/readings/refill`   | Trigger sinh hàng loạt, `filter.types` lọc theo type → `{ runId, totalBuckets }`, theo dõi qua `GET /english/cron/runs/:runId`                                                       |
+| `GET`    | `/admin/readings/:id`      | Chi tiết                                                                                                                                                                             |
+| `PATCH`  | `/admin/readings/:id`      | Sửa `title`/`paragraphs`/`isActive`. Sửa `paragraphs` tự tính lại `wordCount` **và tắt toàn bộ câu hỏi của bài** (xem dưới)                                                          |
+| `DELETE` | `/admin/readings/:id`      | Xoá hẳn. Muốn giữ lại thì `PATCH { isActive: false }`                                                                                                                                |
 
 ## Quan hệ với câu hỏi đọc hiểu
 

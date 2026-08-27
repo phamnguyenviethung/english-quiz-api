@@ -45,17 +45,16 @@ async function getRandomTopics(requestCount: number, excludeIds: number[] = []):
   return _.sampleSize(filtered, requestCount);
 }
 
-async function getRandomTopicPairs(
+function getRandomTopicPairsFromPool(
+  basePool: EnglishTopic[],
   pairCount: number,
   excludeTopicIds: number[] = []
-): Promise<Array<[EnglishTopic, EnglishTopic]>> {
-  const allActive = await getAllActiveTopics();
-
-  let pool = excludeTopicIds.length > 0 ? allActive.filter((t) => !excludeTopicIds.includes(t.id)) : allActive;
+): Array<[EnglishTopic, EnglishTopic]> {
+  let pool = excludeTopicIds.length > 0 ? basePool.filter((t) => !excludeTopicIds.includes(t.id)) : basePool;
 
   if (pool.length < 2 && excludeTopicIds.length > 0) {
     logger.warn(`[TopicService] Only ${pool.length} topic(s) after exclusion, falling back to no exclusion`);
-    pool = allActive;
+    pool = basePool;
   }
 
   if (pool.length < 2) return [];
@@ -90,6 +89,14 @@ async function getRandomTopicPairs(
   return pairs;
 }
 
+async function getRandomTopicPairs(
+  pairCount: number,
+  excludeTopicIds: number[] = []
+): Promise<Array<[EnglishTopic, EnglishTopic]>> {
+  const allActive = await getAllActiveTopics();
+  return getRandomTopicPairsFromPool(allActive, pairCount, excludeTopicIds);
+}
+
 export default {
   getAllActiveTopics,
   getTopicById,
@@ -97,5 +104,6 @@ export default {
   updateTopic,
   deleteTopic,
   getRandomTopics,
-  getRandomTopicPairs
+  getRandomTopicPairs,
+  getRandomTopicPairsFromPool
 };

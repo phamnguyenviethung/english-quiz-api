@@ -90,11 +90,11 @@ Tenant key chỉ đọc quiz. Có 2 tầng giới hạn:
    | Đọc quiz (mọi tenant key)    | `/quiz-types`, `/generate/:quizType`, `/generate-reading`, `/pool/pop`, `/pool/count`, `/pool/questions`, `/pool/models`, `/pool/pick-quiz-type`, `/topics`, `/topics/random-pairs` | `auth: true`            |
    | Quản trị (chỉ session admin) | `POST /pool/fill`, `GET /config`, `GET /config/records`, `PATCH /config/:recordKey`, `POST /config/:recordKey/reset`, `POST /topics`, `GET /cron/runs`, `GET /cron/runs/:runId`     | `auth: { admin: true }` |
 
-2. **Topic / quizType allow-list**: trong các route đọc quiz, tenant còn bị giới hạn theo `tenant_topic_access` / `tenant_quiz_type_access` (hoặc cờ `allowAllTopics` / `allowAllQuizTypes`) — xem [`question-pool.md`](./question-pool.md) và mục 6 bên dưới.
+2. **Topic / quizType allow-list**: trong các route đọc quiz, tenant còn bị giới hạn theo `tenant_topic_access` / `tenant_quiz_type_access` (hoặc cờ `allowAllTopics` / `allowAllQuizTypes`) — xem [`question-pool.md`](./question-pool.md) và mục 6 bên dưới. `/topics` và `/topics/random-pairs` không nhận `auth: { admin: true }` nên vẫn dùng được với mọi tenant key, nhưng **kết quả trả về bị lọc** theo allow-list: tenant giới hạn chỉ thấy/nhận được topic nằm trong `tenant_topic_access` (hoặc rỗng nếu allow-list rỗng), không lộ topic ngoài phạm vi.
 
 ## 6. Enforcement
 
-- **Mọi `/english/*` yêu cầu tenant key hợp lệ hoặc session admin** (`tenantAuthPlugin`). Thiếu/sai → **401**. Gọi route admin-only bằng tenant key → **403**. Topic/quizType ngoài allow-list → **403**.
+- **Mọi `/english/*` yêu cầu tenant key hợp lệ hoặc session admin** (`tenantAuthPlugin`). Thiếu/sai → **401**. Gọi route admin-only bằng tenant key → **403**. Topic/quizType ngoài allow-list → **403** ở các route nhận `topicId`/`quizType` cụ thể (`assertTopicAllowed`/`assertQuizTypeAllowed`); riêng `/topics` và `/topics/random-pairs` không có `topicId` đơn lẻ để assert nên **lọc kết quả** theo allow-list thay vì trả 403.
 - Token có prefix `eqk_` đi thẳng nhánh tenant lookup; token khác được coi là session token của Better Auth. Session admin bỏ qua toàn bộ check admin-only/allow-list.
 - `/health` mở (không auth). `/queues` (bull-board) yêu cầu **cookie phiên admin** — check ở hook global trong `src/api/api.ts`.
 - `topicId = null` (bucket no-topic) luôn được phép truy cập.

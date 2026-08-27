@@ -16,17 +16,17 @@ Nguồn quy tắc nội dung: [`question-generator-guideline.md`](./question-gen
 
 Bảng `english_reading_questions`:
 
-| Cột                                   | Ghi chú                                                                    |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| `passageRefId`                        | FK → `english_reading_passages.id`, **ON DELETE CASCADE**                  |
-| `quizType`                            | 1 trong 19 type ở `readingQuestionTypes.ts`, bị giới hạn theo CEFR level   |
-| `question`                            | Câu hỏi (tiếng Anh)                                                        |
-| `options`                             | `jsonb` — đúng 4 đáp án                                                    |
-| `correctAnswer`                       | **Index 0-based** vào `options`, không phải chữ cái, không phải nội dung   |
-| `explanation`                         | 1 câu tiếng Việt, trỏ tới đoạn chứa evidence                               |
-| `cefrLevel` / `topicId` / `topicName` / `type` | Snapshot từ passage để list/filter không phải join                |
-| `model`, `tokenIn`, `tokenOut`        | Truy vết chi phí (token của cả batch, lặp trên mỗi dòng)                   |
-| `isActive`                            | Tắt câu kém mà không xoá. Câu đã tắt **không** tính là "bài đã có câu hỏi" |
+| Cột                                            | Ghi chú                                                                    |
+| ---------------------------------------------- | -------------------------------------------------------------------------- |
+| `passageRefId`                                 | FK → `english_reading_passages.id`, **ON DELETE CASCADE**                  |
+| `quizType`                                     | 1 trong 19 type ở `readingQuestionTypes.ts`, bị giới hạn theo CEFR level   |
+| `question`                                     | Câu hỏi (tiếng Anh)                                                        |
+| `options`                                      | `jsonb` — đúng 4 đáp án                                                    |
+| `correctAnswer`                                | **Index 0-based** vào `options`, không phải chữ cái, không phải nội dung   |
+| `explanation`                                  | 1 câu tiếng Việt, trỏ tới đoạn chứa evidence                               |
+| `cefrLevel` / `topicId` / `topicName` / `type` | Snapshot từ passage để list/filter không phải join                         |
+| `model`, `tokenIn`, `tokenOut`                 | Truy vết chi phí (token của cả batch, lặp trên mỗi dòng)                   |
+| `isActive`                                     | Tắt câu kém mà không xoá. Câu đã tắt **không** tính là "bài đã có câu hỏi" |
 
 Cột thêm vào `english_reading_passages`: `questionGenAttempts` — xem [Chống lặp vô hạn](#chống-lặp-vô-hạn).
 
@@ -34,11 +34,11 @@ Cột thêm vào `english_reading_passages`: `questionGenAttempts` — xem [Ch�
 
 Đây là **khác biệt cấu trúc lớn nhất** so với 2 pipeline kia:
 
-| Pipeline             | Bucket                           | `bucketKey`   |
-| -------------------- | --------------------------------- | ------------- |
-| Question pool        | `(engLevel, quizType, topicId)`  | `B1:7:vocab`  |
-| Reading passage      | `(cefrLevel, topicId, type)`     | `B1:7:daily`  |
-| **Reading question** | **1 passage**                    | **`rq:42`**   |
+| Pipeline             | Bucket                          | `bucketKey`  |
+| -------------------- | ------------------------------- | ------------ |
+| Question pool        | `(engLevel, quizType, topicId)` | `B1:7:vocab` |
+| Reading passage      | `(cefrLevel, topicId, type)`    | `B1:7:daily` |
+| **Reading question** | **1 passage**                   | **`rq:42`**  |
 
 Một bài hoặc đã đủ `questionsPerPassage` câu, hoặc chưa — không có khái niệm "bucket 3 chiều" ở đây.
 
@@ -229,9 +229,9 @@ Tắt hoặc xoá câu làm bài trở thành "thiếu câu" và sẽ được c
 ### Tenant — `/english/readings/*`, yêu cầu tenant API key
 
 | Method | Path                      | Ghi chú                                                                               |
-| ------ | ------------------------- | -------------------------------------------------------------------------------------- |
+| ------ | ------------------------- | ------------------------------------------------------------------------------------- |
 | `GET`  | `/english/readings/pop`   | 1 bài random kèm trọn bộ câu hỏi. Không destructive. Có fallback nới bucket, xem dưới |
-| `GET`  | `/english/readings/count` | Số bài đã sẵn sàng theo `cefrLevel` / `topicId` / `type`                               |
+| `GET`  | `/english/readings/count` | Số bài đã sẵn sàng theo `cefrLevel` / `topicId` / `type`                              |
 
 Chỉ trả bài đã **đủ** `questionsPerPassage` câu active — bài nửa vời không bao giờ được phục vụ.
 

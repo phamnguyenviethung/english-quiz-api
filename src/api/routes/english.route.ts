@@ -480,7 +480,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   )
 
   // ── Topics ──────────────────────────────────────────────────────────────────
-  .get('/topics', async () => ok(await englishController.listTopics()), {
+  .get('/topics', async ({ tenant }) => ok(await englishController.listTopics(tenant)), {
     auth: true,
     detail: {
       tags: ['English / Topics'],
@@ -495,7 +495,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   })
   .get(
     '/topics/random-pairs',
-    async ({ query }) => ok(await englishController.randomTopicPairs(query.pairCount ?? 1)),
+    async ({ query, tenant }) => ok(await englishController.randomTopicPairs(tenant, query.pairCount ?? 1)),
     {
       auth: true,
       query: t.Object({ pairCount: t.Optional(t.Numeric({ minimum: 1 })) }),
