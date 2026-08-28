@@ -1,0 +1,1 @@
+ALTER TABLE "english_question_pool_reviews" ADD COLUMN "adminNote" text;

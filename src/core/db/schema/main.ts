@@ -134,6 +134,9 @@ export const englishQuestionPoolReview = pgTable(
     topicId: integer().references(() => englishTopic.id),
     topicName: text(),
 
+    // Ghi chú admin gửi kèm khi request review — chèn vào prompt làm hướng soi riêng.
+    adminNote: text(),
+
     originalData: text().notNull(), // JSON.stringify snapshot questionData lúc review
     revisedData: text().notNull(), // JSON string bản sửa ('' khi status='failed')
 

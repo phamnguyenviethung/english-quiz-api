@@ -4,11 +4,11 @@ Vòng **AI review + admin approve** cho từng câu trong `english_question_pool
 
 ## Luồng
 
-1. Admin chọn pool id → `POST /admin/pool/reviews { poolQuestionIds, model? }`.
+1. Admin chọn pool id → `POST /admin/pool/reviews { poolQuestionIds, model?, adminNote? }`.
 2. Với mỗi câu (fire-and-forget, bounded concurrency 3):
    - Load item (`questionPoolService.getPoolQuestionById`), parse `questionData`.
    - Resolve model review theo context **`manual`** (`resolveStudyModel('manual', model?)`).
-   - Dựng prompt review: **`buildReviewPrompt(quizType, ctx)`** (`src/core/services/english/prompt/review-prompt.ts`) — nhúng lại đúng base prompt sinh câu hỏi của `quizType` + `buildDifficultyInstruction(engLevel, optionCount, topicName)` làm "spec", rồi yêu cầu model soi lỗi.
+   - Dựng prompt review: **`buildReviewPrompt(quizType, ctx, { adminNote })`** (`src/core/services/english/prompt/review-prompt.ts`) — nhúng lại đúng base prompt sinh câu hỏi của `quizType` + `buildDifficultyInstruction(engLevel, optionCount, topicName)` làm "spec"; nếu có `adminNote` thì chèn thêm block **ADMIN FOCUS NOTE** để AI soi theo hướng admin nêu; rồi yêu cầu model soi lỗi.
    - `generateStructuredOutput(PoolReviewResultSchema, ...)` → `{ verdict, summary, score, checklist, issues, revisedData }`.
    - Validate `revisedData` theo schema đúng `quizType` (`QUESTION_SCHEMA_BY_TYPE`, lấy từ `study.service.ts`) → set `checklist.formatValid`.
    - Tính `changedFields` = diff top-level key giữa original và revised (`_.isEqual`).
@@ -22,37 +22,38 @@ Chỉ review `pending` mới approve/reject được. `POST /admin/pool/reviews`
 
 ## Bảng `english_question_pool_reviews`
 
-| Cột | Kiểu | Ghi chú |
-|---|---|---|
-| `id` | serial PK | |
-| `poolQuestionRefId` | int FK → `english_question_pool.id` | `onDelete: cascade` |
-| `quizType` / `engLevel` / `optionCount` / `topicId` / `topicName` | snapshot | copy từ pool item lúc review, list/filter khỏi join |
-| `originalData` | text | JSON string snapshot `questionData` lúc review |
-| `revisedData` | text | JSON string bản sửa (`''` khi `failed`) |
-| `verdict` | text | `pass` \| `revised` \| `reject` — kết luận AI về bản gốc (null khi failed) |
-| `summary` | text | 1-3 câu tiếng Việt |
-| `score` | int | 0-100, chất lượng bản gốc |
-| `checklist` | jsonb `PoolReviewChecklist` | 9 cờ AI trả + `formatValid` (server set) |
-| `issues` | jsonb `PoolReviewIssue[]` | `{ field, severity, problem, fix }` |
-| `changedFields` | jsonb `string[]` | top-level field thực sự đổi (authoritative, type-agnostic) |
-| `status` | text | `pending` \| `approved` \| `rejected` \| `failed` — hành động admin |
-| `errorMessage` | text | khi `failed` |
-| `reviewModel` / `tokenIn` / `tokenOut` | | model + token của lần review |
-| `resolvedByUserId` / `resolvedAt` | | Better Auth user id (text, không FK), set khi approve/reject |
-| `createdAt` / `updatedAt` | timestamp | |
+| Cột                                                               | Kiểu                                | Ghi chú                                                                    |
+| ----------------------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| `id`                                                              | serial PK                           |                                                                            |
+| `poolQuestionRefId`                                               | int FK → `english_question_pool.id` | `onDelete: cascade`                                                        |
+| `quizType` / `engLevel` / `optionCount` / `topicId` / `topicName` | snapshot                            | copy từ pool item lúc review, list/filter khỏi join                        |
+| `adminNote`                                                       | text                                | Ghi chú admin gửi kèm khi request review (nullable) — hiện lại ở detail    |
+| `originalData`                                                    | text                                | JSON string snapshot `questionData` lúc review                             |
+| `revisedData`                                                     | text                                | JSON string bản sửa (`''` khi `failed`)                                    |
+| `verdict`                                                         | text                                | `pass` \| `revised` \| `reject` — kết luận AI về bản gốc (null khi failed) |
+| `summary`                                                         | text                                | 1-3 câu tiếng Việt                                                         |
+| `score`                                                           | int                                 | 0-100, chất lượng bản gốc                                                  |
+| `checklist`                                                       | jsonb `PoolReviewChecklist`         | 9 cờ AI trả + `formatValid` (server set)                                   |
+| `issues`                                                          | jsonb `PoolReviewIssue[]`           | `{ field, severity, problem, fix }`                                        |
+| `changedFields`                                                   | jsonb `string[]`                    | top-level field thực sự đổi (authoritative, type-agnostic)                 |
+| `status`                                                          | text                                | `pending` \| `approved` \| `rejected` \| `failed` — hành động admin        |
+| `errorMessage`                                                    | text                                | khi `failed`                                                               |
+| `reviewModel` / `tokenIn` / `tokenOut`                            |                                     | model + token của lần review                                               |
+| `resolvedByUserId` / `resolvedAt`                                 |                                     | Better Auth user id (text, không FK), set khi approve/reject               |
+| `createdAt` / `updatedAt`                                         | timestamp                           |                                                                            |
 
 `checklist` (10 cờ): `questionTextChanged`, `answerChanged`, `optionsChanged`, `explanationChanged`, `exampleChanged`, `hasFactualError`, `hasGrammarError`, `topicMismatch`, `levelMismatch`, `formatValid`.
 
 ## Endpoints (`Admin / Pool Review`, session admin)
 
-| Method | Path | Mô tả |
-|---|---|---|
-| `POST` | `/admin/pool/reviews` | body `{ poolQuestionIds: number[] (1..30), model? }` → `{ accepted, skipped }`. Fire-and-forget. |
-| `GET` | `/admin/pool/reviews` | filter `status`/`verdict`/`quizType`/`engLevel`/`topicId`/`poolQuestionRefId`/`q`/`sort`/`page`/`pageSize`. Không kèm original/revisedData. |
-| `GET` | `/admin/pool/reviews/:id` | detail: `originalData`/`revisedData` + bản đã parse + `diff[]` từng field. |
-| `POST` | `/admin/pool/reviews/:id/approve` | body `{ data? }`. Ghi đè pool item, review → `approved`. |
-| `POST` | `/admin/pool/reviews/:id/reject` | body `{ note? }`. Review → `rejected`, pool item giữ nguyên. |
-| `DELETE` | `/admin/pool/reviews/:id` | Xoá row review. |
+| Method   | Path                              | Mô tả                                                                                                                                                                                                                     |
+| -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/admin/pool/reviews`             | body `{ poolQuestionIds: number[] (1..30), model?, adminNote? (≤1000) }` → `{ accepted, skipped }`. Fire-and-forget. `model` = OpenRouter id trong pool `manualEnabled`; `adminNote` chèn vào prompt làm hướng soi riêng. |
+| `GET`    | `/admin/pool/reviews`             | filter `status`/`verdict`/`quizType`/`engLevel`/`topicId`/`poolQuestionRefId`/`q`/`sort`/`page`/`pageSize`. Không kèm original/revisedData.                                                                               |
+| `GET`    | `/admin/pool/reviews/:id`         | detail: `originalData`/`revisedData` + bản đã parse + `diff[]` từng field.                                                                                                                                                |
+| `POST`   | `/admin/pool/reviews/:id/approve` | body `{ data? }`. Ghi đè pool item, review → `approved`.                                                                                                                                                                  |
+| `POST`   | `/admin/pool/reviews/:id/reject`  | body `{ note? }`. Review → `rejected`, pool item giữ nguyên.                                                                                                                                                              |
+| `DELETE` | `/admin/pool/reviews/:id`         | Xoá row review.                                                                                                                                                                                                           |
 
 ## Giới hạn / lưu ý
 

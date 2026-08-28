@@ -138,7 +138,10 @@ async function insertReviewRow(values: InsertEnglishQuestionPoolReview): Promise
  * Review một câu trong pool bằng LLM rồi ghi một row english_question_pool_reviews.
  * Không throw ra ngoài — lỗi được ghi thành row status='failed' để batch chạy tiếp.
  */
-async function reviewOne(poolQuestionId: number, opts: { model?: string; requestedBy: string }): Promise<void> {
+async function reviewOne(
+  poolQuestionId: number,
+  opts: { model?: string; adminNote?: string; requestedBy: string }
+): Promise<void> {
   const item = await questionPoolService.getPoolQuestionById(poolQuestionId);
   if (!item) {
     logger.warn(`[PoolReview] Pool question not found id=${poolQuestionId}, skip`);
@@ -146,6 +149,7 @@ async function reviewOne(poolQuestionId: number, opts: { model?: string; request
   }
 
   const quizType = item.quizType;
+  const adminNote = opts.adminNote?.trim() || null;
   const snapshot = {
     poolQuestionRefId: item.id,
     quizType,
@@ -153,6 +157,7 @@ async function reviewOne(poolQuestionId: number, opts: { model?: string; request
     optionCount: item.optionCount,
     topicId: item.topicId,
     topicName: item.topicName,
+    adminNote,
     originalData: item.questionData
   };
 
@@ -182,7 +187,7 @@ async function reviewOne(poolQuestionId: number, opts: { model?: string; request
     const { data, usage } = await generateStructuredOutput(PoolReviewResultSchema, {
       model: resolved.model,
       provider: resolved.provider,
-      instructions: buildReviewPrompt(quizType, ctx),
+      instructions: buildReviewPrompt(quizType, ctx, { adminNote: adminNote ?? undefined }),
       input: JSON.stringify(original),
       temperature: 0.3,
       maxOutputTokens: 3000
@@ -233,7 +238,7 @@ async function reviewOne(poolQuestionId: number, opts: { model?: string; request
  */
 async function enqueueReviews(
   poolQuestionIds: number[],
-  opts: { model?: string; requestedBy: string }
+  opts: { model?: string; adminNote?: string; requestedBy: string }
 ): Promise<{ accepted: number; skipped: number }> {
   const unique = [...new Set(poolQuestionIds.filter((id) => Number.isInteger(id) && id > 0))];
   if (unique.length === 0) throw new BusinessLogicException('poolQuestionIds rỗng hoặc không hợp lệ');
@@ -294,6 +299,7 @@ const REVIEW_LIST_COLUMNS = {
   optionCount: englishQuestionPoolReview.optionCount,
   topicId: englishQuestionPoolReview.topicId,
   topicName: englishQuestionPoolReview.topicName,
+  adminNote: englishQuestionPoolReview.adminNote,
   verdict: englishQuestionPoolReview.verdict,
   summary: englishQuestionPoolReview.summary,
   score: englishQuestionPoolReview.score,

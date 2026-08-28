@@ -528,6 +528,12 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
         t.String({
           description: 'OpenRouter model id cho việc review. Bỏ trống → random trong pool `manualEnabled`.'
         })
+      ),
+      adminNote: t.Optional(
+        t.String({
+          maxLength: 1000,
+          description: 'Ghi chú admin gửi kèm cho AI review — chèn vào prompt làm hướng soi riêng cho các câu này.'
+        })
       )
     }),
     detail: {

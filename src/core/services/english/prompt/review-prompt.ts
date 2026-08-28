@@ -56,10 +56,21 @@ function buildBaseGenPrompt(quizType: QuizType, wrongAnswerCount: number, topic?
  * (base prompt của quizType + difficulty instruction theo engLevel/topic) rồi yêu
  * cầu model soi lỗi và trả về bản sửa full + checklist + issues.
  */
-export function buildReviewPrompt(quizType: QuizType, ctx: ReviewContext): string {
+export function buildReviewPrompt(quizType: QuizType, ctx: ReviewContext, opts?: { adminNote?: string }): string {
   const wrongAnswerCount = ctx.optionCount - 1;
   const topic = ctx.topicName ?? undefined;
   const spec = buildBaseGenPrompt(quizType, wrongAnswerCount, topic) + buildDifficultyInstruction(ctx);
+
+  const adminNote = opts?.adminNote?.trim();
+  const adminNoteBlock = adminNote
+    ? `
+
+ADMIN FOCUS NOTE (người duyệt yêu cầu chú ý riêng cho câu này — ưu tiên cao):
+"""
+${adminNote}
+"""
+Soi kỹ theo hướng admin nêu. Nếu mâu thuẫn với SPEC thì ưu tiên tính đúng đắn và không mơ hồ của câu hỏi. Vẫn phải trả về đủ revisedData + checklist + issues như yêu cầu.`
+    : '';
 
   return `You are an expert English quiz reviewer and editor.
 
@@ -67,6 +78,7 @@ The quiz item in the user message ("${quizType}") was generated to follow this S
 --- BEGIN SPEC ---
 ${spec}
 --- END SPEC ---
+${adminNoteBlock}
 
 Review the item against the SPEC. Check specifically:
 - factual / grammar / spelling errors

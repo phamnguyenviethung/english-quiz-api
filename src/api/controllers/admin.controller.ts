@@ -316,9 +316,16 @@ async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
 
 // ─── Pool AI review ─────────────────────────────────────────────────────────────
 
-function enqueuePoolReviews(input: { poolQuestionIds: number[]; model?: string }, requestedBy: string) {
+function enqueuePoolReviews(
+  input: { poolQuestionIds: number[]; model?: string; adminNote?: string },
+  requestedBy: string
+) {
   logger.info(`[Admin] Enqueue pool reviews count=${input.poolQuestionIds.length} by=${requestedBy}`);
-  return questionPoolReviewService.enqueueReviews(input.poolQuestionIds, { model: input.model, requestedBy });
+  return questionPoolReviewService.enqueueReviews(input.poolQuestionIds, {
+    model: input.model,
+    adminNote: input.adminNote,
+    requestedBy
+  });
 }
 
 function listPoolReviews(query: ListPoolReviewsInput) {

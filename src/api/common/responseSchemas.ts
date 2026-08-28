@@ -259,6 +259,7 @@ export const PoolReviewListItemSchema = t.Object({
   optionCount: t.Number(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  adminNote: t.Nullable(t.String({ description: 'Ghi chú admin gửi kèm khi request review.' })),
   verdict: t.Nullable(t.String({ description: "'pass' | 'revised' | 'reject'." })),
   summary: t.Nullable(t.String()),
   score: t.Nullable(t.Number()),
