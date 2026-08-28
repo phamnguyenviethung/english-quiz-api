@@ -383,3 +383,7 @@ Dashboard dùng endpoint này cho màn refill: admin lọc chiều → thấy ng
 ## Monitor
 
 Run tracking (run → bucket → model attempt) ghi vào DB (`english_cron_job_runs` / `_buckets` / `_model_attempts`), kèm `costUsd` ở cả 3 mức. Xem qua API `GET /english/cron/runs`, `GET /english/cron/runs/:runId`, `GET /english/cron/usage` (tổng hợp chi tiêu theo ngày/model), hoặc Bull Board tại `/queues`.
+
+## AI Review
+
+Rà soát + sửa từng câu trong pool bằng LLM, lưu kết quả chờ admin approve để ghi đè `questionData`. Xem [`question-pool-review.md`](./question-pool-review.md). Bảng `english_question_pool_reviews`, endpoints `Admin / Pool Review` (`POST/GET /admin/pool/reviews`, `.../:id/approve|reject`). Approve là đường **duy nhất** cột `english_question_pool.updatedAt` được set.

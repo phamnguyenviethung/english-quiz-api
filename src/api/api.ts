@@ -98,6 +98,10 @@ export async function startApi(): Promise<void> {
               description: 'Refill thủ công toàn bộ question pool. Yêu cầu tài khoản admin.'
             },
             {
+              name: 'Admin / Pool Review',
+              description: 'AI review + admin approve/reject cho câu hỏi trong pool. Yêu cầu tài khoản admin.'
+            },
+            {
               name: 'Admin / Reading Questions',
               description: 'Kho câu hỏi đọc hiểu sinh từ reading passage + refill thủ công. Yêu cầu tài khoản admin.'
             },

@@ -202,6 +202,48 @@ async function popQuestion(
   return mapRowToPoolQuestion(row);
 }
 
+/**
+ * Lấy 1 câu theo id kèm engLevel + topicName (leftJoin english_topics). Dùng cho
+ * luồng AI review — cần full context của item để dựng prompt review.
+ */
+async function getPoolQuestionById(id: number): Promise<PoolQuestionListItem | null> {
+  const [row] = await db
+    .select({
+      id: englishQuestionPool.id,
+      quizType: englishQuestionPool.quizType,
+      engLevel: englishQuestionPool.engLevel,
+      optionCount: englishQuestionPool.optionCount,
+      questionData: englishQuestionPool.questionData,
+      model: englishQuestionPool.model,
+      tokenIn: englishQuestionPool.tokenIn,
+      tokenOut: englishQuestionPool.tokenOut,
+      topicId: englishQuestionPool.topicId,
+      topicDisplayName: englishTopic.displayName,
+      topicRawName: englishTopic.name,
+      createdAt: englishQuestionPool.createdAt
+    })
+    .from(englishQuestionPool)
+    .leftJoin(englishTopic, eq(englishQuestionPool.topicId, englishTopic.id))
+    .where(eq(englishQuestionPool.id, id))
+    .limit(1);
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    quizType: row.quizType as QuizType,
+    engLevel: row.engLevel,
+    questionData: row.questionData,
+    model: row.model,
+    tokenIn: row.tokenIn,
+    tokenOut: row.tokenOut,
+    optionCount: row.optionCount,
+    topicId: row.topicId,
+    topicName: row.topicDisplayName ?? row.topicRawName ?? null,
+    createdAt: row.createdAt
+  };
+}
+
 const totalTokenExpr = sql`${englishQuestionPool.tokenIn} + ${englishQuestionPool.tokenOut}`;
 
 // createdAt/token không unique nên tie-break bằng id, nếu không phân trang có thể trùng/sót row.
@@ -369,6 +411,7 @@ async function clearPool(engLevel?: string, topicId?: number | null): Promise<vo
 export default {
   getPoolCount,
   getPoolCountsByBucket,
+  getPoolQuestionById,
   popQuestion,
   listQuestions,
   listPoolModels,

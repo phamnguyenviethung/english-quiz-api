@@ -30,6 +30,9 @@ import {
   type ReadingPassageType
 } from '@/core/services/english/questionTypes';
 import questionPoolService from '@/core/services/english/questionPool.service';
+import questionPoolReviewService, {
+  type ListPoolReviewsInput
+} from '@/core/services/english/questionPoolReview.service';
 import { BusinessLogicException } from '@/core/exceptions';
 import studyService, { type DifficultyContext } from '@/core/services/english/study.service';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
@@ -309,6 +312,39 @@ async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
     filter,
     bucketKeys: input.bucketKeys
   });
+}
+
+// ─── Pool AI review ─────────────────────────────────────────────────────────────
+
+function enqueuePoolReviews(input: { poolQuestionIds: number[]; model?: string }, requestedBy: string) {
+  logger.info(`[Admin] Enqueue pool reviews count=${input.poolQuestionIds.length} by=${requestedBy}`);
+  return questionPoolReviewService.enqueueReviews(input.poolQuestionIds, { model: input.model, requestedBy });
+}
+
+function listPoolReviews(query: ListPoolReviewsInput) {
+  return questionPoolReviewService.listReviews(query);
+}
+
+async function getPoolReview(id: number) {
+  const found = await questionPoolReviewService.getReviewById(id);
+  if (!found) throw new NotFoundException(`Không tìm thấy review: ${id}`);
+  return found;
+}
+
+function approvePoolReview(id: number, input: { data?: unknown }, userId: string) {
+  logger.info(`[Admin] Approve pool review id=${id} by=${userId}`);
+  return questionPoolReviewService.approveReview(id, { data: input.data, userId });
+}
+
+function rejectPoolReview(id: number, input: { note?: string }, userId: string) {
+  logger.info(`[Admin] Reject pool review id=${id} by=${userId}`);
+  return questionPoolReviewService.rejectReview(id, { note: input.note, userId });
+}
+
+async function deletePoolReview(id: number) {
+  logger.info(`[Admin] Delete pool review id=${id}`);
+  await questionPoolReviewService.deleteReview(id);
+  return { id, deleted: true };
 }
 
 // ─── Reading passages ───────────────────────────────────────────────────────────
@@ -708,6 +744,12 @@ export default {
   setQuizTypeAccess,
   listPoolBuckets,
   triggerManualPoolRefill,
+  enqueuePoolReviews,
+  listPoolReviews,
+  getPoolReview,
+  approvePoolReview,
+  rejectPoolReview,
+  deletePoolReview,
   listReadings,
   getReading,
   updateReading,

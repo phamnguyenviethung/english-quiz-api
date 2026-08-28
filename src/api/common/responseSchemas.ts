@@ -228,6 +228,97 @@ export const PoolModelStatSchema = t.Object({
   count: t.Number({ description: 'Số câu trong pool được sinh bởi model này.' })
 });
 
+// ── Question pool AI review ──────────────────────────────────────────────────
+export const PoolReviewChecklistSchema = t.Object({
+  questionTextChanged: t.Boolean({ description: 'word / sentence / description / paragraph / context đổi.' }),
+  answerChanged: t.Boolean({ description: 'correctAnswer / correctStatement / oddWord đổi.' }),
+  optionsChanged: t.Boolean({ description: 'wrongAnswers / wrongStatements / groupWords đổi.' }),
+  explanationChanged: t.Boolean(),
+  exampleChanged: t.Boolean({ description: 'exampleSentence / exampleTranslation đổi.' }),
+  hasFactualError: t.Boolean({ description: 'Bản gốc có lỗi kiến thức/logic.' }),
+  hasGrammarError: t.Boolean(),
+  topicMismatch: t.Boolean({ description: 'Bản gốc lệch topic.' }),
+  levelMismatch: t.Boolean({ description: 'Bản gốc lệch CEFR level.' }),
+  formatValid: t.Boolean({ description: 'revisedData parse đúng schema quizType (do server tính).' })
+});
+
+export const PoolReviewIssueSchema = t.Object({
+  field: t.String(),
+  severity: t.Union([t.Literal('low'), t.Literal('medium'), t.Literal('high')]),
+  problem: t.String(),
+  fix: t.String()
+});
+
+// Row của list endpoint — KHÔNG kèm originalData/revisedData (payload lớn).
+// verdict/status là text() ở DB nên để t.String() (giá trị: xem POOL_REVIEW_*).
+export const PoolReviewListItemSchema = t.Object({
+  id: t.Number(),
+  poolQuestionRefId: t.Number(),
+  quizType: t.String(),
+  engLevel: t.String(),
+  optionCount: t.Number(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  verdict: t.Nullable(t.String({ description: "'pass' | 'revised' | 'reject'." })),
+  summary: t.Nullable(t.String()),
+  score: t.Nullable(t.Number()),
+  checklist: t.Nullable(PoolReviewChecklistSchema),
+  issues: t.Nullable(t.Array(PoolReviewIssueSchema)),
+  changedFields: t.Nullable(t.Array(t.String())),
+  status: t.String({ description: "'pending' | 'approved' | 'rejected' | 'failed'." }),
+  errorMessage: t.Nullable(t.String()),
+  reviewModel: t.String(),
+  tokenIn: t.Number(),
+  tokenOut: t.Number(),
+  resolvedByUserId: t.Nullable(t.String()),
+  resolvedAt: t.Nullable(DateTimeSchema),
+  createdAt: t.Nullable(DateTimeSchema),
+  updatedAt: t.Nullable(DateTimeSchema)
+});
+
+export const PoolReviewDetailSchema = t.Composite([
+  PoolReviewListItemSchema,
+  t.Object({
+    originalData: t.String({ description: 'JSON string — snapshot questionData lúc review.' }),
+    revisedData: t.String({ description: "JSON string bản sửa ('' khi status=failed)." }),
+    original: t.Unknown({ description: 'originalData đã parse.' }),
+    revised: t.Unknown({ description: 'revisedData đã parse (null khi rỗng).' }),
+    diff: t.Array(t.Object({ field: t.String(), before: t.Unknown(), after: t.Unknown() }), {
+      description: 'So sánh từng top-level field trong changedFields.'
+    })
+  })
+]);
+
+export const PoolReviewPageSchema = t.Object({
+  items: t.Array(PoolReviewListItemSchema),
+  page: t.Number({ description: 'Trang hiện tại, 1-based.' }),
+  pageSize: t.Number(),
+  total: t.Number(),
+  totalPages: t.Number()
+});
+
+export const PoolReviewEnqueueResultSchema = t.Object({
+  accepted: t.Number({ description: 'Số câu được nhận để review.' }),
+  skipped: t.Number({ description: 'Số câu bỏ qua do đang có review pending hoặc đang chạy.' })
+});
+
+export const PoolReviewApproveResultSchema = t.Object({
+  review: PoolReviewListItemSchema,
+  poolQuestion: t.Object({
+    id: t.Number(),
+    quizType: t.String(),
+    engLevel: t.String(),
+    optionCount: t.Number(),
+    questionData: t.String(),
+    model: t.String(),
+    tokenIn: t.Number(),
+    tokenOut: t.Number(),
+    topicId: t.Nullable(t.Number()),
+    createdAt: t.Nullable(DateTimeSchema),
+    updatedAt: t.Nullable(DateTimeSchema)
+  })
+});
+
 // ── Reading passages ─────────────────────────────────────────────────────────
 // Bài đọc thuần (chưa có câu hỏi) — khác quizType 'reading' trong question pool.
 export const ReadingPassageSchema = t.Object({

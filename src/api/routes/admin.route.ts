@@ -17,6 +17,11 @@ import {
   CatalogModelSchema,
   ModelPricingSyncResultSchema,
   PoolBucketPreviewSchema,
+  PoolReviewListItemSchema,
+  PoolReviewDetailSchema,
+  PoolReviewPageSchema,
+  PoolReviewEnqueueResultSchema,
+  PoolReviewApproveResultSchema,
   PublicApiKeySchema,
   IssuedApiKeySchema,
   TenantTopicAccessSchema,
@@ -507,6 +512,149 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
     response: {
       200: ApiOk(t.Object({ runId: t.Nullable(t.String()), totalBuckets: t.Number() })),
       400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+
+  // ── Pool AI review ──────────────────────────────────────────────────────────
+  .post('/pool/reviews', async ({ body, user }) => ok(await adminController.enqueuePoolReviews(body, user.id)), {
+    body: t.Object({
+      poolQuestionIds: t.Array(t.Integer({ minimum: 1 }), {
+        minItems: 1,
+        maxItems: 30,
+        description: 'Danh sách english_question_pool.id cần AI review. Tối đa 30 mỗi lần.'
+      }),
+      model: t.Optional(
+        t.String({
+          description: 'OpenRouter model id cho việc review. Bỏ trống → random trong pool `manualEnabled`.'
+        })
+      )
+    }),
+    detail: {
+      tags: ['Admin / Pool Review'],
+      summary: 'Enqueue AI review cho pool item',
+      description:
+        'Chạy LLM rà soát + sửa từng câu, ghi kết quả vào bảng review ở trạng thái `pending`. Fire-and-forget ' +
+        '(bounded concurrency), trả về ngay `{ accepted, skipped }`. `skipped` = câu đang có review `pending` ' +
+        `hoặc đang chạy. Prompt review dựng lại từ prompt sinh câu hỏi của đúng quizType + engLevel/topic. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(PoolReviewEnqueueResultSchema),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/pool/reviews', async ({ query }) => ok(await adminController.listPoolReviews(query)), {
+    query: t.Object({
+      status: t.Optional(
+        t.Union([t.Literal('pending'), t.Literal('approved'), t.Literal('rejected'), t.Literal('failed')])
+      ),
+      verdict: t.Optional(t.Union([t.Literal('pass'), t.Literal('revised'), t.Literal('reject')])),
+      quizType: t.Optional(QuizTypeSchema),
+      engLevel: t.Optional(EngLevelSchema),
+      topicId: t.Optional(t.Numeric({ minimum: 1 })),
+      poolQuestionRefId: t.Optional(t.Numeric({ minimum: 1 })),
+      q: t.Optional(
+        t.String({ maxLength: 100, description: 'ILIKE trên summary/originalData/revisedData; toàn số = id.' })
+      ),
+      sort: t.Optional(
+        t.Union([t.Literal('id_desc'), t.Literal('id_asc'), t.Literal('created_desc'), t.Literal('created_asc')])
+      ),
+      page: t.Optional(t.Numeric({ minimum: 1 })),
+      pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100 }))
+    }),
+    detail: {
+      tags: ['Admin / Pool Review'],
+      summary: 'List AI reviews',
+      description: `Danh sách kết quả AI review có filter + phân trang. Không kèm originalData/revisedData. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(PoolReviewPageSchema),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .get('/pool/reviews/:id', async ({ params }) => ok(await adminController.getPoolReview(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Pool Review'],
+      summary: 'Get AI review by id',
+      description: `Chi tiết 1 review kèm originalData/revisedData đã parse và diff từng field. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(PoolReviewDetailSchema),
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .post(
+    '/pool/reviews/:id/approve',
+    async ({ params, body, user }) => ok(await adminController.approvePoolReview(params.id, body, user.id)),
+    {
+      params: IdParam,
+      body: t.Object({
+        data: t.Optional(
+          t.Unknown({
+            description:
+              'Bản dữ liệu câu hỏi admin tự chỉnh để ghi đè. Bỏ trống → dùng revisedData của review. ' +
+              'Luôn được validate lại theo schema đúng quizType, sai → 400.'
+          })
+        )
+      }),
+      detail: {
+        tags: ['Admin / Pool Review'],
+        summary: 'Approve AI review',
+        description:
+          'Ghi đè `english_question_pool.questionData` bằng `data` (nếu có) hoặc `revisedData`, set review ' +
+          `\`status=approved\`. Chỉ review \`pending\` mới approve được. ${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(PoolReviewApproveResultSchema),
+        400: ApiErrorSchema,
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
+  .post(
+    '/pool/reviews/:id/reject',
+    async ({ params, body, user }) => ok(await adminController.rejectPoolReview(params.id, body, user.id)),
+    {
+      params: IdParam,
+      body: t.Object({
+        note: t.Optional(t.String({ maxLength: 500, description: 'Ghi chú lý do reject, append vào summary.' }))
+      }),
+      detail: {
+        tags: ['Admin / Pool Review'],
+        summary: 'Reject AI review',
+        description:
+          'Set review `status=rejected`, KHÔNG đụng vào pool item. Chỉ review `pending` mới reject được. ' +
+          `${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(PoolReviewListItemSchema),
+        400: ApiErrorSchema,
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
+  .delete('/pool/reviews/:id', async ({ params }) => ok(await adminController.deletePoolReview(params.id)), {
+    params: IdParam,
+    detail: {
+      tags: ['Admin / Pool Review'],
+      summary: 'Delete AI review row',
+      description: `Xoá hẳn một row review (dọn rác). Không ảnh hưởng pool item. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Object({ id: t.Number(), deleted: t.Boolean() })),
+      404: ApiErrorSchema,
       ...COMMON_ERRORS
     }
   })

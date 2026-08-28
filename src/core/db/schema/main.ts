@@ -70,7 +70,9 @@ export const englishQuestionPool = pgTable(
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
     topicId: integer().references(() => englishTopic.id),
-    createdAt: timestamp().defaultNow()
+    createdAt: timestamp().defaultNow(),
+    // Set khi admin approve một AI review ghi đè questionData (xem englishQuestionPoolReview).
+    updatedAt: timestamp().defaultNow()
   },
   (table) => [
     // Bucket (engLevel, quizType, topicId) là truy vấn nóng nhất: count/pop/refill và
@@ -82,6 +84,91 @@ export const englishQuestionPool = pgTable(
 
 export type EnglishQuestionPool = typeof englishQuestionPool.$inferSelect;
 export type InsertEnglishQuestionPool = typeof englishQuestionPool.$inferInsert;
+
+// ----------------------------------------------------------------------------
+// Question pool AI review — kết quả LLM rà soát + sửa một câu trong pool, chờ
+// admin approve để ghi đè questionData của english_question_pool. Xem
+// docs/question-pool-review.md.
+// ----------------------------------------------------------------------------
+
+export const POOL_REVIEW_STATUSES = ['pending', 'approved', 'rejected', 'failed'] as const;
+export type PoolReviewStatus = (typeof POOL_REVIEW_STATUSES)[number];
+
+// Kết luận của AI về bản gốc. Khác với status (hành động của admin).
+export const POOL_REVIEW_VERDICTS = ['pass', 'revised', 'reject'] as const;
+export type PoolReviewVerdict = (typeof POOL_REVIEW_VERDICTS)[number];
+
+export interface PoolReviewChecklist {
+  questionTextChanged: boolean; // word / sentence / description / paragraph / context đổi
+  answerChanged: boolean; // correctAnswer / correctStatement / oddWord đổi
+  optionsChanged: boolean; // wrongAnswers / wrongStatements / groupWords đổi
+  explanationChanged: boolean;
+  exampleChanged: boolean; // exampleSentence / exampleTranslation đổi
+  hasFactualError: boolean; // bản gốc có lỗi kiến thức/logic
+  hasGrammarError: boolean;
+  topicMismatch: boolean; // bản gốc lệch topic
+  levelMismatch: boolean; // bản gốc lệch CEFR level
+  formatValid: boolean; // revisedData parse đúng schema quizType — service set, không phải AI
+}
+
+export interface PoolReviewIssue {
+  field: string; // vd "correctAnswer", "wrongAnswers[2]"
+  severity: 'low' | 'medium' | 'high';
+  problem: string; // tiếng Việt
+  fix: string; // đã sửa gì
+}
+
+export const englishQuestionPoolReview = pgTable(
+  'english_question_pool_reviews',
+  {
+    id: serial().primaryKey(),
+    poolQuestionRefId: integer()
+      .notNull()
+      .references(() => englishQuestionPool.id, { onDelete: 'cascade' }),
+
+    // Snapshot từ pool item lúc review — list/filter khỏi join, và giữ được context
+    // kể cả khi pool item bị sửa/xoá sau đó.
+    quizType: text().notNull(),
+    engLevel: text().notNull(),
+    optionCount: integer().notNull(),
+    topicId: integer().references(() => englishTopic.id),
+    topicName: text(),
+
+    originalData: text().notNull(), // JSON.stringify snapshot questionData lúc review
+    revisedData: text().notNull(), // JSON string bản sửa ('' khi status='failed')
+
+    verdict: text(), // POOL_REVIEW_VERDICTS — null khi failed
+    summary: text(), // 1-3 câu tiếng Việt
+    score: integer(), // 0-100, đánh giá chất lượng bản gốc
+    checklist: jsonb().$type<PoolReviewChecklist>(),
+    issues: jsonb().$type<PoolReviewIssue[]>(),
+    // Diff top-level key giữa original và revised, do service tính bằng _.isEqual.
+    changedFields: jsonb().$type<string[]>(),
+
+    status: text().notNull().default('pending'), // POOL_REVIEW_STATUSES
+    errorMessage: text(), // khi status='failed'
+
+    reviewModel: text().notNull(),
+    tokenIn: integer().default(0).notNull(),
+    tokenOut: integer().default(0).notNull(),
+
+    // Better Auth user id (text). Không đặt FK chéo sang schema/auth.ts (file CLI-gen).
+    resolvedByUserId: text(),
+    resolvedAt: timestamp(),
+
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow()
+  },
+  (t) => [
+    index('idx_pool_reviews_status').on(t.status),
+    index('idx_pool_reviews_pool_ref').on(t.poolQuestionRefId),
+    index('idx_pool_reviews_bucket').on(t.engLevel, t.quizType, t.topicId),
+    index('idx_pool_reviews_created_at').on(t.createdAt)
+  ]
+);
+
+export type EnglishQuestionPoolReview = typeof englishQuestionPoolReview.$inferSelect;
+export type InsertEnglishQuestionPoolReview = typeof englishQuestionPoolReview.$inferInsert;
 
 // ----------------------------------------------------------------------------
 // Reading passages — bài đọc ngắn sinh bằng LLM từ (topicName, cefrLevel, type).
