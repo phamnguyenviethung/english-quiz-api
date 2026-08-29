@@ -16,6 +16,7 @@ import {
 import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
 import { runWithConcurrency } from '@/utils/concurrency';
 import { buildReviewPrompt, type ReviewContext } from './prompt/review-prompt';
+import { renderLearnerView } from './prompt/review-type-spec';
 import type { DifficultyContext } from './prompt/vocab-prompt';
 import questionPoolService from './questionPool.service';
 import type { QuizType } from './questionTypes';
@@ -64,15 +65,17 @@ const QUESTION_SCHEMA_BY_TYPE: Partial<Record<QuizType, z.ZodTypeAny>> = {
 
 // ─── Structured output schema ────────────────────────────────────────────────
 
+// 10 cờ AI trả (true = có vấn đề trong bản gốc). `formatValid` do service tự set sau.
 const ReviewChecklistAiSchema = z.object({
-  questionTextChanged: z.boolean(),
-  answerChanged: z.boolean(),
-  optionsChanged: z.boolean(),
-  explanationChanged: z.boolean(),
-  exampleChanged: z.boolean(),
-  hasFactualError: z.boolean(),
-  hasGrammarError: z.boolean(),
-  topicMismatch: z.boolean(),
+  notSolvable: z.boolean(),
+  insufficientContext: z.boolean(),
+  multipleDefensibleAnswers: z.boolean(),
+  answerIncorrect: z.boolean(),
+  explanationMismatch: z.boolean(),
+  distractorExplanationMismatch: z.boolean(),
+  translationMismatch: z.boolean(),
+  spellingOrGrammarError: z.boolean(),
+  offTopic: z.boolean(),
   levelMismatch: z.boolean()
 });
 
@@ -184,13 +187,14 @@ async function reviewOne(
       topicName: item.topicName
     };
 
+    const learnerView = renderLearnerView(quizType, original as Record<string, unknown>);
     const { data, usage } = await generateStructuredOutput(PoolReviewResultSchema, {
       model: resolved.model,
       provider: resolved.provider,
       instructions: buildReviewPrompt(quizType, ctx, { adminNote: adminNote ?? undefined }),
-      input: JSON.stringify(original),
+      input: `${learnerView}\n\n=== RAW JSON (trả revisedData đúng shape này) ===\n${JSON.stringify(original)}`,
       temperature: 0.3,
-      maxOutputTokens: 3000
+      maxOutputTokens: 4000
     });
 
     const perTypeSchema = QUESTION_SCHEMA_BY_TYPE[quizType];

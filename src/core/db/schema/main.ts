@@ -98,16 +98,18 @@ export type PoolReviewStatus = (typeof POOL_REVIEW_STATUSES)[number];
 export const POOL_REVIEW_VERDICTS = ['pass', 'revised', 'reject'] as const;
 export type PoolReviewVerdict = (typeof POOL_REVIEW_VERDICTS)[number];
 
+// Mọi cờ = "vấn đề này CÓ trong bản gốc" (true = xấu), trừ `formatValid` (true = tốt).
 export interface PoolReviewChecklist {
-  questionTextChanged: boolean; // word / sentence / description / paragraph / context đổi
-  answerChanged: boolean; // correctAnswer / correctStatement / oddWord đổi
-  optionsChanged: boolean; // wrongAnswers / wrongStatements / groupWords đổi
-  explanationChanged: boolean;
-  exampleChanged: boolean; // exampleSentence / exampleTranslation đổi
-  hasFactualError: boolean; // bản gốc có lỗi kiến thức/logic
-  hasGrammarError: boolean;
-  topicMismatch: boolean; // bản gốc lệch topic
-  levelMismatch: boolean; // bản gốc lệch CEFR level
+  notSolvable: boolean; // người học ở level này không giải được từ đề + options
+  insufficientContext: boolean; // thiếu dữ kiện / phải đoán / cần kiến thức ngoài
+  multipleDefensibleAnswers: boolean; // có ≥2 phương án hợp lý
+  answerIncorrect: boolean; // đáp án đúng thực ra sai
+  explanationMismatch: boolean; // explanation không khớp đáp án đúng
+  distractorExplanationMismatch: boolean; // giải thích distractor lệch index / sai đối tượng / chung chung
+  translationMismatch: boolean; // bản dịch VI↔EN lệch (false nếu loại không có field dịch)
+  spellingOrGrammarError: boolean; // lỗi chính tả / ngữ pháp ở bất kỳ field nào
+  offTopic: boolean; // lệch topic (chỉ xét central term + context)
+  levelMismatch: boolean; // rõ ràng lệch CEFR
   formatValid: boolean; // revisedData parse đúng schema quizType — service set, không phải AI
 }
 

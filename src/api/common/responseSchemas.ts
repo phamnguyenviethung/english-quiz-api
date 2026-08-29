@@ -229,17 +229,21 @@ export const PoolModelStatSchema = t.Object({
 });
 
 // ── Question pool AI review ──────────────────────────────────────────────────
+// Mọi cờ = "vấn đề CÓ trong bản gốc" (true = xấu), trừ `formatValid` (true = tốt).
 export const PoolReviewChecklistSchema = t.Object({
-  questionTextChanged: t.Boolean({ description: 'word / sentence / description / paragraph / context đổi.' }),
-  answerChanged: t.Boolean({ description: 'correctAnswer / correctStatement / oddWord đổi.' }),
-  optionsChanged: t.Boolean({ description: 'wrongAnswers / wrongStatements / groupWords đổi.' }),
-  explanationChanged: t.Boolean(),
-  exampleChanged: t.Boolean({ description: 'exampleSentence / exampleTranslation đổi.' }),
-  hasFactualError: t.Boolean({ description: 'Bản gốc có lỗi kiến thức/logic.' }),
-  hasGrammarError: t.Boolean(),
-  topicMismatch: t.Boolean({ description: 'Bản gốc lệch topic.' }),
-  levelMismatch: t.Boolean({ description: 'Bản gốc lệch CEFR level.' }),
-  formatValid: t.Boolean({ description: 'revisedData parse đúng schema quizType (do server tính).' })
+  notSolvable: t.Boolean({ description: 'Người học ở level này không giải được từ đề + options.' }),
+  insufficientContext: t.Boolean({ description: 'Thiếu dữ kiện / phải đoán / cần kiến thức ngoài.' }),
+  multipleDefensibleAnswers: t.Boolean({ description: 'Có ≥2 phương án hợp lý.' }),
+  answerIncorrect: t.Boolean({ description: 'Đáp án đúng thực ra sai.' }),
+  explanationMismatch: t.Boolean({ description: '`explanation` không khớp đáp án đúng.' }),
+  distractorExplanationMismatch: t.Boolean({
+    description: 'Giải thích phương án sai lệch index / sai đối tượng / chung chung.'
+  }),
+  translationMismatch: t.Boolean({ description: 'Bản dịch VI↔EN lệch (false nếu loại không có field dịch).' }),
+  spellingOrGrammarError: t.Boolean({ description: 'Có lỗi chính tả/ngữ pháp ở bất kỳ field nào.' }),
+  offTopic: t.Boolean({ description: 'Lệch chủ đề (chỉ xét central term + context).' }),
+  levelMismatch: t.Boolean({ description: 'Rõ ràng lệch cấp độ CEFR.' }),
+  formatValid: t.Boolean({ description: 'revisedData parse đúng schema quizType (do server tính, true = tốt).' })
 });
 
 export const PoolReviewIssueSchema = t.Object({
