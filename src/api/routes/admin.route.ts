@@ -24,6 +24,7 @@ import {
   PoolReviewApproveResultSchema,
   SiblingGenResultSchema,
   SiblingSupportedTypeSchema,
+  PoolSiblingBucketPreviewSchema,
   PublicApiKeySchema,
   IssuedApiKeySchema,
   TenantTopicAccessSchema,
@@ -723,6 +724,82 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       }
     }
   )
+  .get('/pool/siblings/buckets', async ({ query }) => ok(await adminController.listPoolSiblingBuckets(query)), {
+    query: t.Object({
+      engLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`. Bỏ trống = mọi trình độ.' })),
+      topicIds: t.Optional(t.String({ description: 'CSV topic id. Bỏ trống = mọi topic đang bật.' })),
+      quizTypes: t.Optional(
+        t.String({ description: 'CSV quizType — chỉ trong 9 loại hỗ trợ sibling, loại khác trả 400.' })
+      ),
+      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
+      sourcesPerBucket: t.Optional(t.Numeric({ minimum: 1 })),
+      siblingsPerSource: t.Optional(t.Numeric({ minimum: 1, maximum: 5 }))
+    }),
+    detail: {
+      tags: ['Admin / Pool Sibling'],
+      summary: 'Preview buckets cho manual bulk sibling refill',
+      description:
+        'Bucket nào sẽ được sinh câu tương tự với đúng bộ tham số này, kèm `sourceCount` (số câu gốc dùng làm ' +
+        'nguồn) và `plannedCount` (ước lượng số câu sẽ thêm). Dùng chung `buildManualSiblingPlan` với endpoint ' +
+        `chạy thật. Chỉ đọc, không tốn LLM. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(PoolSiblingBucketPreviewSchema),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
+  .post('/pool/siblings/refill', async ({ body }) => ok(await adminController.triggerManualPoolSiblingRefill(body)), {
+    body: t.Object({
+      models: t.Optional(
+        t.Array(t.String(), {
+          description:
+            'OpenRouter model id. Mỗi bucket chọn ngẫu nhiên 1 model trong danh sách. Bỏ trống = mọi model ' +
+            'bật `manualEnabled`. Model không tồn tại / đang tắt → 400.'
+        })
+      ),
+      scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
+      sourcesPerBucket: t.Optional(
+        t.Integer({
+          minimum: 1,
+          description: 'Số câu gốc lấy mỗi bucket. Mặc định `sibling_gen.sourcesPerBucketPerRun`.'
+        })
+      ),
+      siblingsPerSource: t.Optional(
+        t.Integer({
+          minimum: 1,
+          maximum: 5,
+          description: 'Số câu tương tự mỗi câu gốc. Mặc định `sibling_gen.siblingsPerSource`.'
+        })
+      ),
+      filter: t.Optional(
+        t.Object({
+          engLevels: t.Optional(t.Array(EngLevelSchema)),
+          topicIds: t.Optional(t.Array(t.Integer())),
+          quizTypes: t.Optional(t.Array(QuizTypeSchema))
+        })
+      ),
+      bucketKeys: t.Optional(
+        t.Array(t.String(), { description: 'Chốt danh sách bucketKey từ preview (áp dụng sau `filter`).' })
+      )
+    }),
+    detail: {
+      tags: ['Admin / Pool Sibling'],
+      summary: 'Trigger manual bulk sibling refill',
+      description:
+        'Quét bucket (engLevel × topic × quizType, chỉ 9 loại hỗ trợ), lấy câu gốc sẵn có sinh câu tương tự — ' +
+        'chạy in-process (không qua BullMQ), fire-and-forget, trả ngay `{ runId, totalBuckets }`. `scope=deficient` ' +
+        '(mặc định) chỉ bù bucket dưới `maxPerBucket`; `scope=all` ép sinh cho mọi bucket khớp. Theo dõi ở ' +
+        `GET /english/cron/runs/:runId (jobKey \`sibling_gen_manual\`). ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Object({ runId: t.Nullable(t.String()), totalBuckets: t.Number() })),
+      400: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
 
   // ── Reading passages ─────────────────────────────────────────────────────────
   // Bài đọc thuần sinh từ (topicName, cefrLevel). KHÁC `quizType = 'reading'` ở

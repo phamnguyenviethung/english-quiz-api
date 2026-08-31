@@ -34,7 +34,12 @@ import questionPoolReviewService, {
   type ListPoolReviewsInput
 } from '@/core/services/english/questionPoolReview.service';
 import siblingQuestionService from '@/core/services/english/siblingQuestion.service';
-import { SIBLING_SUPPORTED_QUIZ_TYPES, getQuizTypeLabel } from '@/core/services/english/questionTypes';
+import siblingRefillService from '@/core/services/english/siblingRefill.service';
+import {
+  SIBLING_SUPPORTED_QUIZ_TYPES,
+  getQuizTypeLabel,
+  isSiblingSupported
+} from '@/core/services/english/questionTypes';
 import { SIBLING_LOCK_FIELDS_BY_TYPE } from '@/core/services/english/prompt/sibling-prompt';
 import { BusinessLogicException } from '@/core/exceptions';
 import studyService, { type DifficultyContext } from '@/core/services/english/study.service';
@@ -380,6 +385,95 @@ function listSiblingSupportedTypes() {
     label: getQuizTypeLabel(quizType),
     lockFields: SIBLING_LOCK_FIELDS_BY_TYPE[quizType]
   }));
+}
+
+// ─── Pool sibling bulk refill (admin trigger, giống pool/refill + pool/buckets) ──
+
+/** toBucketFilter + chặn quizType ngoài danh sách hỗ trợ sinh sibling. */
+function toSiblingBucketFilter(input: PoolBucketFilterInput | undefined): BucketFilter | undefined {
+  const filter = toBucketFilter(input);
+  const unsupported = filter?.quizTypes?.filter((quizType) => !isSiblingSupported(quizType)) ?? [];
+  if (unsupported.length > 0) {
+    throw new BusinessLogicException(`Loại câu không hỗ trợ sinh câu tương tự: ${unsupported.join(', ')}`);
+  }
+  return filter;
+}
+
+interface ListSiblingBucketsQuery {
+  engLevels?: string;
+  topicIds?: string;
+  quizTypes?: string;
+  scope?: 'all' | 'deficient';
+  sourcesPerBucket?: number;
+  siblingsPerSource?: number;
+}
+
+async function listPoolSiblingBuckets(query: ListSiblingBucketsQuery) {
+  const topicIds = parseCsvParam(query.topicIds)?.map((id) => Number(id));
+  const filter = toSiblingBucketFilter({
+    engLevels: parseCsvParam(query.engLevels),
+    quizTypes: parseCsvParam(query.quizTypes),
+    topicIds
+  });
+
+  const { matched, planned, totalPlannedSiblings } = await siblingRefillService.buildManualSiblingPlan({
+    scope: query.scope,
+    sourcesPerBucket: query.sourcesPerBucket,
+    siblingsPerSource: query.siblingsPerSource,
+    filter
+  });
+
+  return {
+    buckets: matched.map((item) => ({
+      bucketKey: bucketKeyOf(item),
+      engLevel: item.engLevel,
+      quizType: item.quizType,
+      optionCount: item.optionCount,
+      topicId: item.topicId,
+      topicName: item.topicName,
+      currentCount: item.currentCount,
+      deficiency: item.deficiency,
+      sourceCount: item.sourceCount,
+      plannedSources: item.plannedSources,
+      plannedCount: item.plannedCount
+    })),
+    summary: {
+      matchedBuckets: matched.length,
+      plannedBuckets: planned.length,
+      plannedSiblings: totalPlannedSiblings,
+      maxPerBucket: questionPoolService.getMaxPoolSize()
+    }
+  };
+}
+
+interface TriggerManualPoolSiblingRefillInput {
+  models?: string[];
+  scope?: 'all' | 'deficient';
+  sourcesPerBucket?: number;
+  siblingsPerSource?: number;
+  filter?: PoolBucketFilterInput;
+  bucketKeys?: string[];
+}
+
+async function triggerManualPoolSiblingRefill(input: TriggerManualPoolSiblingRefillInput) {
+  const models = await resolveStudyModels('manual', input.models);
+  const filter = toSiblingBucketFilter(input.filter);
+
+  logger.info(
+    `[Admin] Manual sibling refill scope=${input.scope ?? 'deficient'} ` +
+      `models=${models.map((m) => m.model).join(',') || '(all manual)'} ` +
+      `sourcesPerBucket=${input.sourcesPerBucket ?? '-'} siblingsPerSource=${input.siblingsPerSource ?? '-'} ` +
+      `filter=${filter ? JSON.stringify(filter) : '-'} selectedBuckets=${input.bucketKeys?.length ?? '-'}`
+  );
+
+  return siblingRefillService.runManualSiblingRefill({
+    models,
+    scope: input.scope,
+    sourcesPerBucket: input.sourcesPerBucket,
+    siblingsPerSource: input.siblingsPerSource,
+    filter,
+    bucketKeys: input.bucketKeys
+  });
 }
 
 // ─── Reading passages ───────────────────────────────────────────────────────────
@@ -787,6 +881,8 @@ export default {
   deletePoolReview,
   generatePoolSiblings,
   listSiblingSupportedTypes,
+  listPoolSiblingBuckets,
+  triggerManualPoolSiblingRefill,
   listReadings,
   getReading,
   updateReading,

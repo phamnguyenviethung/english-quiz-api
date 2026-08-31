@@ -57,6 +57,26 @@ Bật bằng `job_flags.siblingGenEnabled = true`. Scheduler upsert từ `siblin
    - Ghi `english_cron_job_buckets` + `recordModelAttempt` + `computeCostUsd`. Lỗi một câu gốc → log + tiếp; lỗi bucket → bucket `status='failed'`, run vẫn chạy tiếp.
 4. `summarizeRun(run, { forceFinishRunningBuckets: true })`.
 
+### Manual bulk (`POST /admin/pool/siblings/refill`)
+
+Bản admin-trigger của luồng auto — dùng cho tab "Câu tương tự" ở màn Sinh hàng loạt. Mẫu theo
+`POST /admin/pool/refill` (`siblingRefill.service.ts`, dùng chung `processSiblingBucket` với cron).
+
+1. `resolveStudyModels('manual', models?)` validate danh sách model (id lạ / tắt → 400).
+2. `buildManualSiblingPlan({ scope, sourcesPerBucket?, siblingsPerSource?, filter, bucketKeys })`:
+   - `scanBuckets({ scope: 'all', filter: { ...filter, quizTypes: ⊆ SIBLING_SUPPORTED } })` + `getSiblingSourceCountsByBucket()`.
+   - Mỗi bucket: `maxSiblings = min(sourcesPerBucket, sourceCount) × siblingsPerSource`;
+     `plannedCount = scope==='deficient' ? min(maxSiblings, max(0, deficiency)) : maxSiblings`;
+     `plannedSources = ceil(plannedCount / siblingsPerSource)`. `sourcesPerBucket` / `siblingsPerSource` mặc định
+     lấy từ `sibling_gen` config, admin ghi đè được (siblingsPerSource cap 5).
+3. `startRun({ jobKey: 'sibling_gen_manual', trigger: 'manual' })` → `void executeManualSiblingPlanInProcess(...)`
+   (`runWithConcurrency`, concurrency = `question_pool.manualFillConcurrency`, guard `activeManualRuns`), trả ngay
+   `{ runId, totalBuckets }`.
+4. Mỗi bucket: Redis lock → `pickSiblingSourceIds(plannedSources)` → `processSiblingBucket(...)` với
+   `context: 'manual'`, `forceInsert: scope === 'all'` (deficient thì tôn trọng `maxPerBucket`), model random theo bucket.
+5. `summarizeRun(run, { forceFinishRunningBuckets: true })`. Preview: `GET /admin/pool/siblings/buckets` chạy chung
+   `buildManualSiblingPlan` nên số liệu không lệch.
+
 ## Ghi vào pool
 
 Mỗi candidate model trả về đi qua các cổng validate (`validateCandidate`):
@@ -70,10 +90,12 @@ Candidate đạt → `INSERT INTO english_question_pool` (`sourceQuestionId = c�
 
 ## Endpoints (`Admin / Pool Sibling`, session admin)
 
-| Method | Path                                   | Mô tả                                                                                                                                                             |
-| ------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/admin/pool/siblings/supported-types` | `[{ quizType, label, lockFields }]` — loại hỗ trợ + field khóa. UI dùng để bật/tắt nút.                                                                           |
-| `POST` | `/admin/pool/siblings/:id`             | body `{ count: 1..5, model?, adminNote? (≤1000) }` → `SiblingGenResultSchema`. Đồng bộ. Ghi thẳng vào pool. Loại không hỗ trợ → 400, câu gốc không tồn tại → 404. |
+| Method | Path                                   | Mô tả                                                                                                                                                                     |
+| ------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/admin/pool/siblings/supported-types` | `[{ quizType, label, lockFields }]` — loại hỗ trợ + field khóa. UI dùng để bật/tắt nút.                                                                                   |
+| `POST` | `/admin/pool/siblings/:id`             | body `{ count: 1..5, model?, adminNote? (≤1000) }` → `SiblingGenResultSchema`. Đồng bộ. Ghi thẳng vào pool. Loại không hỗ trợ → 400, câu gốc không tồn tại → 404.         |
+| `GET`  | `/admin/pool/siblings/buckets`         | query `{ engLevels?, topicIds?, quizTypes? (CSV), scope?, sourcesPerBucket?, siblingsPerSource? }` → `PoolSiblingBucketPreviewSchema`. Chỉ đọc.                           |
+| `POST` | `/admin/pool/siblings/refill`          | body `{ models?, scope?, sourcesPerBucket?, siblingsPerSource? (1..5), filter?, bucketKeys? }` → `{ runId, totalBuckets }`. Fire-and-forget, jobKey `sibling_gen_manual`. |
 
 Lọc sibling trong pool: `GET /english/pool/questions?sourceQuestionId=<id>` hoặc `?onlySiblings=true` (thêm vào `ListPoolQuestionsInput`; `sourceQuestionId` thắng `onlySiblings`).
 

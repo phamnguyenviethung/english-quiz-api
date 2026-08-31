@@ -162,6 +162,25 @@ async function getPoolCountsByBucket(): Promise<Map<string, number>> {
   return new Map(rows.map((row) => [`${row.engLevel}:${row.topicId ?? 'null'}:${row.quizType}`, row.total]));
 }
 
+/**
+ * Count câu GỐC (`sourceQuestionId IS NULL`) mỗi bucket trong 1 query, key khớp `bucketKeyOf`.
+ * Dùng cho preview manual sibling refill — biết mỗi bucket có bao nhiêu câu để làm nguồn sinh sibling.
+ */
+async function getSiblingSourceCountsByBucket(): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      engLevel: englishQuestionPool.engLevel,
+      quizType: englishQuestionPool.quizType,
+      topicId: englishQuestionPool.topicId,
+      total: count()
+    })
+    .from(englishQuestionPool)
+    .where(isNull(englishQuestionPool.sourceQuestionId))
+    .groupBy(englishQuestionPool.engLevel, englishQuestionPool.quizType, englishQuestionPool.topicId);
+
+  return new Map(rows.map((row) => [`${row.engLevel}:${row.topicId ?? 'null'}:${row.quizType}`, row.total]));
+}
+
 async function getPoolCount(engLevel: string, quizType: QuizType, topicId: number | null = null): Promise<number> {
   const [result] = await db
     .select({ total: count() })
@@ -474,6 +493,7 @@ async function clearPool(engLevel?: string, topicId?: number | null): Promise<vo
 export default {
   getPoolCount,
   getPoolCountsByBucket,
+  getSiblingSourceCountsByBucket,
   getPoolQuestionById,
   popQuestion,
   listQuestions,

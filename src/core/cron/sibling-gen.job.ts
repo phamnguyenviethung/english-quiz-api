@@ -3,16 +3,11 @@ import { bullmqConnection, TIMEZONE } from './cron.config';
 import logger from '@/configs/logger.config';
 import redisClient from '@/configs/redis.config';
 import { getEnglishConfigSnapshot, onEnglishConfigChanged } from '@/core/services/english/englishConfig.service';
-import englishCronJobTrackingService, {
-  normalizeError,
-  type EnglishCronRunRef
-} from '@/core/services/english/englishCronJobTracking.service';
+import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
 import { scanBuckets, type RefillBucketCandidate } from '@/core/services/english/poolRefill.service';
-import questionPoolService from '@/core/services/english/questionPool.service';
-import siblingQuestionService from '@/core/services/english/siblingQuestion.service';
+import { processSiblingBucket } from '@/core/services/english/siblingRefill.service';
 import { SIBLING_SUPPORTED_QUIZ_TYPES } from '@/core/services/english/questionTypes';
 import type { QuizType } from '@/core/services/english/questionTypes';
-import aiModelService, { computeCostUsd } from '@/core/services/ai/aiModel.service';
 
 const QUEUE_NAME = 'english-sibling-gen';
 const LOG_TAG = 'SiblingGen';
@@ -44,98 +39,6 @@ export async function reconcileSiblingGenSchedulers(): Promise<void> {
 
 function lockKeyOf(c: RefillBucketCandidate): string {
   return `question-pool:lock:${c.engLevel}:${c.topicId ?? 'null'}:${c.quizType}`;
-}
-
-async function processBucket(
-  run: EnglishCronRunRef | null,
-  candidate: RefillBucketCandidate,
-  opts: { sourcesPerBucket: number; siblingsPerSource: number; remainingBudget: number }
-): Promise<{ inserted: number }> {
-  const bucket = await englishCronJobTrackingService.startBucket(run, {
-    engLevel: candidate.engLevel,
-    quizType: candidate.quizType,
-    optionCount: candidate.optionCount,
-    topicId: candidate.topicId,
-    topicName: candidate.topicName,
-    requestedCount: opts.sourcesPerBucket * opts.siblingsPerSource,
-    metadata: { source: 'sibling_gen' }
-  });
-  const startedAt = new Date();
-
-  try {
-    const sourceIds = await questionPoolService.pickSiblingSourceIds(
-      candidate.engLevel,
-      candidate.quizType,
-      candidate.topicId,
-      opts.sourcesPerBucket
-    );
-
-    let generated = 0;
-    let inserted = 0;
-    let tokenIn = 0;
-    let tokenOut = 0;
-    let model = '';
-    let budgetLeft = opts.remainingBudget;
-
-    for (const sourceId of sourceIds) {
-      if (budgetLeft <= 0) break;
-      const count = Math.min(opts.siblingsPerSource, budgetLeft);
-      try {
-        const res = await siblingQuestionService.generateSiblingsForSource(sourceId, {
-          count,
-          context: 'schedule',
-          forceInsert: false
-        });
-        generated += res.generated;
-        inserted += res.inserted;
-        tokenIn += res.tokenIn;
-        tokenOut += res.tokenOut;
-        model = res.model || model;
-        budgetLeft -= res.inserted;
-      } catch (err) {
-        logger.warn(`[${LOG_TAG}] Source ${sourceId} failed: ${normalizeError(err).message}`);
-      }
-    }
-
-    const costUsd = model ? computeCostUsd(await aiModelService.getModelByModelId(model), tokenIn, tokenOut) : null;
-    await englishCronJobTrackingService.recordModelAttempt({
-      run,
-      bucket,
-      model: model || '(none)',
-      attemptOrder: 1,
-      status: 'success',
-      requestedCount: sourceIds.length * opts.siblingsPerSource,
-      generatedCount: generated,
-      tokenIn,
-      tokenOut,
-      costUsd,
-      startedAt
-    });
-    await englishCronJobTrackingService.finishBucket(bucket, {
-      status: 'success',
-      requestedCount: sourceIds.length * opts.siblingsPerSource,
-      generatedCount: generated,
-      insertedCount: inserted,
-      skippedCount: Math.max(0, generated - inserted),
-      tokenIn,
-      tokenOut,
-      costUsd
-    });
-    logger.info(
-      `[${LOG_TAG}] Bucket done engLevel=${candidate.engLevel} topicId=${candidate.topicId} quizType=${candidate.quizType} sources=${sourceIds.length} inserted=${inserted}`
-    );
-    return { inserted };
-  } catch (err) {
-    await englishCronJobTrackingService.finishBucket(bucket, {
-      status: 'failed',
-      errorPhase: 'generate_model',
-      error: err
-    });
-    logger.error(
-      `[${LOG_TAG}] Bucket failed engLevel=${candidate.engLevel} topicId=${candidate.topicId} quizType=${candidate.quizType}: ${normalizeError(err).message}`
-    );
-    return { inserted: 0 };
-  }
 }
 
 async function runSiblingGen(trigger: { bullJobId: string; bullJobName: string }): Promise<void> {
@@ -181,10 +84,12 @@ async function runSiblingGen(trigger: { bullJobId: string; bullJobName: string }
         continue;
       }
       try {
-        const { inserted } = await processBucket(run, candidate, {
-          sourcesPerBucket: cfg.sourcesPerBucketPerRun,
+        const { inserted } = await processSiblingBucket(run, candidate, {
+          sourceLimit: cfg.sourcesPerBucketPerRun,
           siblingsPerSource: cfg.siblingsPerSource,
-          remainingBudget: cfg.maxSiblingsPerRun - produced
+          forceInsert: false,
+          context: 'schedule',
+          budgetLeft: cfg.maxSiblingsPerRun - produced
         });
         produced += inserted;
         bucketsProcessed++;

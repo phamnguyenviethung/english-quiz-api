@@ -365,6 +365,31 @@ export const SiblingSupportedTypeSchema = t.Object({
   lockFields: t.Array(t.String(), { description: 'Các field JSON được giữ nguyên văn từ câu gốc.' })
 });
 
+// Preview cho manual bulk sibling refill (GET /admin/pool/siblings/buckets).
+export const PoolSiblingBucketSchema = t.Object({
+  bucketKey: t.String({ description: '`{engLevel}:{topicId|null}:{quizType}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  engLevel: t.String(),
+  quizType: t.String(),
+  optionCount: t.Number(),
+  topicId: t.Nullable(t.Number()),
+  topicName: t.Nullable(t.String()),
+  currentCount: t.Number({ description: 'Số câu đang có trong bucket.' }),
+  deficiency: t.Number({ description: 'question_pool.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
+  sourceCount: t.Number({ description: 'Số câu gốc (sourceQuestionId IS NULL) dùng làm nguồn sinh sibling.' }),
+  plannedSources: t.Number({ description: 'Số câu gốc thực sự sẽ lấy làm nguồn.' }),
+  plannedCount: t.Number({ description: 'Ước lượng số câu tương tự sẽ thêm. 0 = bucket bị bỏ qua.' })
+});
+
+export const PoolSiblingBucketPreviewSchema = t.Object({
+  buckets: t.Array(PoolSiblingBucketSchema),
+  summary: t.Object({
+    matchedBuckets: t.Number({ description: 'Số bucket khớp filter (kể cả bucket sẽ bị bỏ qua).' }),
+    plannedBuckets: t.Number(),
+    plannedSiblings: t.Number(),
+    maxPerBucket: t.Number()
+  })
+});
+
 // ── Reading passages ─────────────────────────────────────────────────────────
 // Bài đọc thuần (chưa có câu hỏi) — khác quizType 'reading' trong question pool.
 export const ReadingPassageSchema = t.Object({
