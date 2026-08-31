@@ -101,10 +101,14 @@ export type PoolReviewVerdict = (typeof POOL_REVIEW_VERDICTS)[number];
 // Mọi cờ = "vấn đề này CÓ trong bản gốc" (true = xấu), trừ `formatValid` (true = tốt).
 export interface PoolReviewChecklist {
   notSolvable: boolean; // người học ở level này không giải được từ đề + options
-  insufficientContext: boolean; // thiếu dữ kiện / phải đoán / cần kiến thức ngoài
+  insufficientContext: boolean; // không có manh mối chốt đúng 1 option / distractor gần nghĩa cũng lọt
   multipleDefensibleAnswers: boolean; // có ≥2 phương án hợp lý
   answerIncorrect: boolean; // đáp án đúng thực ra sai
-  explanationMismatch: boolean; // explanation không khớp đáp án đúng
+  optionsFormInconsistent: boolean; // options lệch loại từ / độ dài / dạng ngữ pháp / ngôn ngữ, hoặc không điền được vào chỗ trống
+  requiresOutsideKnowledge: boolean; // phải biết dữ kiện ngoài câu / vượt level mới chọn được
+  solvedAnswerMismatch: boolean; // đáp án AI tự giải ra khác đáp án được gán
+  explanationMismatch: boolean; // explanation mâu thuẫn / mô tả option khác
+  explanationDoesNotDeriveAnswer: boolean; // theo đề + explanation vẫn không dẫn tới đúng option gán
   distractorExplanationMismatch: boolean; // giải thích distractor lệch index / sai đối tượng / chung chung
   translationMismatch: boolean; // bản dịch VI↔EN lệch (false nếu loại không có field dịch)
   spellingOrGrammarError: boolean; // lỗi chính tả / ngữ pháp ở bất kỳ field nào

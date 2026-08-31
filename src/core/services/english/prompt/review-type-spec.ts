@@ -1,115 +1,34 @@
 import type { QuizType } from '../questionTypes';
 
 /**
- * Mô tả cấu trúc JSON + "người học nhìn thấy gì" cho từng loại quiz trong pool.
- * Dùng cho review prompt — KHÔNG phải prompt sinh câu hỏi. Mọi mảng song song
- * (`wrong*`, `*Explanations`, `optionTranslations`) dài đúng `optionCount - 1` và
- * cùng thứ tự; option người học thấy = [đáp án đúng, ...distractors] rồi client trộn.
+ * Mô tả NGẮN GỌN (văn xuôi) cho người review từng loại quiz trong pool: loại này
+ * bắt người học làm gì, một câu đạt trông ra sao, và invariant tối thiểu. KHÔNG
+ * liệt kê field/kiểu JSON — nội dung câu hỏi được đưa vào prompt ở dạng người đọc
+ * (learner view + answer key), raw JSON chỉ kèm để biết shape trả về.
+ * `<optionCount>` / `<optionCount-1>` được thay số thật trong buildReviewPrompt.
  */
 export const QUIZ_TYPE_REVIEW_SPEC: Record<QuizType, string> = {
-  vocab: `STRUCTURE ("vocab") — test the Vietnamese meaning of an English word.
-- Learner sees — STEM: the word \`word\` (client shows: "\\"<word>\\" có nghĩa là gì?"). OPTIONS: <optionCount> Vietnamese meanings = [\`correctAnswer\`, ...\`wrongAnswers\`] (client shuffles, letters A–F).
-- \`correctAnswer\` = the correct answer — a concise VIETNAMESE gloss of \`word\`.
-- \`wrongAnswers\` = distractors — VIETNAMESE meanings, same part of speech, each fully wrong in every sense/register. Exactly <optionCount-1> items.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order as \`wrongAnswers\`; item [i] must explain why \`wrongAnswers\`[i] is wrong.
-- \`explanation\` = 1–2 Vietnamese sentences: the real meaning/nuance/register of \`word\`. No example, no markdown.
-- \`exampleSentence\` / \`exampleTranslation\` = a fresh English sentence using \`word\` + its Vietnamese translation (study aid, not part of the question).
-- Metadata (NOT an option): \`partOfSpeech\`.
-- Invariants: \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`; \`word\` and options are not proper nouns.`,
+  vocab: `LOẠI "vocab": người học thấy một từ tiếng Anh và chọn nghĩa tiếng Việt đúng trong <optionCount> lựa chọn. Câu đạt: từ có một nghĩa phổ biến rõ ràng, đáp án là gloss tiếng Việt gọn đúng nghĩa đó, <optionCount-1> distractor cùng loại từ nhưng sai ở mọi nghĩa/ngữ vực. Mỗi distractor có đúng một câu giải thích tương ứng theo thứ tự.`,
 
-  fillblank: `STRUCTURE ("fillblank") — choose the English word that fills a blank in a sentence.
-- Learner sees — STEM: \`sentence\` (contains literal "___"), with \`sentenceTranslation\` shown under it and \`highlightedWord\` highlighted. OPTIONS: <optionCount> ENGLISH words = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled), each may show its Vietnamese gloss.
-- \`correctAnswer\` = the correct answer — the ENGLISH word that fills "___", in the exact inflected form the sentence needs.
-- \`wrongAnswers\` = distractors — ENGLISH words, same part of speech, grammatically valid in the slot, wrong SPECIFICALLY because of this sentence's context. Exactly <optionCount-1> items.
-- \`optionTranslations\` = Vietnamese gloss of each \`wrongAnswers\` item, SAME order. \`correctAnswerTranslation\` = Vietnamese gloss of \`correctAnswer\`.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] must cite the specific clue in THIS sentence that rules out \`wrongAnswers\`[i].
-- \`sentenceTranslation\` = full Vietnamese translation of \`sentence\` with the blank filled in (no "___"). \`highlightedWord\` = the exact Vietnamese substring of \`sentenceTranslation\` corresponding to the answer.
-- \`explanation\` = 1–2 Vietnamese sentences: why the correct word fits THIS sentence (cite the clue). \`exampleSentence\`/\`exampleTranslation\` = a different English sentence + translation.
-- Metadata (NOT an option): \`word\`.
-- Invariants: \`sentence\` contains "___"; \`wrongAnswers.length === optionTranslations.length === wrongAnswerExplanations.length === optionCount - 1\`.`,
+  fillblank: `LOẠI "fillblank": người học thấy một câu tiếng Anh có "___" và chọn từ tiếng Anh điền vào trong <optionCount> lựa chọn. Câu đạt: ngữ cảnh trong câu đủ mạnh để chỉ MỘT từ điền được hợp lý; mọi lựa chọn đều đúng ngữ pháp ở chỗ trống và cùng loại từ, cùng dạng (thì/số ít-nhiều), <optionCount-1> distractor sai vì ngữ cảnh cụ thể này chứ không phải sai ngữ pháp. Có bản dịch câu, gloss cho đáp án và từng distractor.`,
 
-  phrase: `STRUCTURE ("phrase") — test the Vietnamese meaning of an English phrase / collocation / phrasal verb.
-- Learner sees — STEM: \`phrase\` (client shows: "Cụm từ \\"<phrase>\\" có nghĩa là gì?"). May contain placeholders sth/sb. OPTIONS: <optionCount> Vietnamese meanings = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled).
-- \`correctAnswer\` = the correct answer — VIETNAMESE idiomatic meaning of the WHOLE phrase (placeholders as "điều gì đó"/"ai đó").
-- \`wrongAnswers\` = distractors — VIETNAMESE meanings that belong to COMPLETELY DIFFERENT phrases (no partial/paraphrase overlap with the correct meaning). Exactly <optionCount-1> items.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] states what the phrase really means and why \`wrongAnswers\`[i] is fundamentally different.
-- \`explanation\` = 1–2 Vietnamese sentences: real meaning + usage context/register. No example, no markdown.
-- \`exampleSentence\`/\`exampleTranslation\` = English sentence using the phrase (placeholders replaced by real words) + translation.
-- Invariants: \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`.`,
+  phrase: `LOẠI "phrase": người học thấy một cụm từ / phrasal verb / collocation tiếng Anh và chọn nghĩa tiếng Việt đúng. Câu đạt: đáp án là nghĩa thành ngữ của CẢ cụm, <optionCount-1> distractor là nghĩa của cụm HOÀN TOÀN khác (không trùng/không diễn giải lại nghĩa đúng). Mỗi distractor có một câu giải thích tương ứng.`,
 
-  conversation: `STRUCTURE ("conversation") — choose the English word/phrase that fills a blank inside a 4-line dialogue.
-- Learner sees — STEM: the 4 lines of \`dialogueLines\` (one contains "___"), then \`sentence\` (= dialogueLines joined by newlines, one "___") with \`sentenceTranslation\` and \`highlightedWord\` highlighted. OPTIONS: <optionCount> ENGLISH words/phrases = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled).
-- \`correctAnswer\` = the correct answer — the ENGLISH word/short phrase that fills "___".
-- \`wrongAnswers\` = distractors — ENGLISH words/phrases, same part of speech / collocation pattern, valid grammar in the blank, wrong due to THIS dialogue's context. Exactly <optionCount-1> items.
-- \`optionTranslations\` = Vietnamese gloss of each \`wrongAnswers\` item, SAME order. \`correctAnswerTranslation\` = Vietnamese gloss of \`correctAnswer\`.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] cites the dialogue clue that rules out \`wrongAnswers\`[i].
-- \`sentenceTranslation\` = full Vietnamese translation of the dialogue, blank filled. \`explanation\` = 1–2 Vietnamese sentences: why the answer fits the conversation. \`exampleSentence\`/\`exampleTranslation\` = a different sentence + translation.
-- Metadata (NOT an option): \`highlightedWord\`.
-- Invariants: \`dialogueLines.length === 4\`; exactly one line and \`sentence\` contain "___"; \`wrongAnswers.length === optionTranslations.length === wrongAnswerExplanations.length === optionCount - 1\`.`,
+  conversation: `LOẠI "conversation": người học thấy hội thoại 4 dòng, một dòng có "___", và chọn từ/cụm ngắn tiếng Anh điền vào. Câu đạt: mạch hội thoại chốt được đúng một lựa chọn; mọi lựa chọn đúng ngữ pháp ở chỗ trống, <optionCount-1> distractor sai vì bối cảnh hội thoại. Có bản dịch, gloss đáp án và distractor.`,
 
-  description: `STRUCTURE ("description") — from a real-life scene/use-case clue, pick the matching English word.
-- Learner sees — STEM: \`description\` (a scenario, in Vietnamese or English per \`descriptionLanguage\`), then "Từ tiếng Anh nào phù hợp nhất với tình huống này?". OPTIONS: <optionCount> ENGLISH words = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled).
-- \`correctAnswer\` = the correct answer — a SINGLE English word (noun/verb/adjective per \`partOfSpeech\`), uniquely matching the clue.
-- \`wrongAnswers\` = distractors — ENGLISH words, same part of speech, definitively wrong for THIS clue (not synonyms / broader / narrower). Exactly <optionCount-1> items.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] quotes/paraphrases the clue that rules out \`wrongAnswers\`[i].
-- \`explanation\` = 1–2 Vietnamese sentences: why \`correctAnswer\` fits the clue. \`exampleSentence\`/\`exampleTranslation\` = English sentence using \`correctAnswer\` + translation.
-- Metadata (NOT an option): \`descriptionLanguage\`, \`partOfSpeech\`.
-- Invariants: \`correctAnswer\` is one token; \`description\` must NOT contain \`correctAnswer\` (or an inflected form or a Vietnamese translation of it) and must NOT read like a dictionary definition or a meta-question ("nghĩa là", "which word", "chọn từ"...); \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`; \`descriptionLanguage\` must truthfully label the language of \`description\`.`,
+  description: `LOẠI "description": người học đọc một tình huống đời thực (tiếng Việt hoặc Anh theo descriptionLanguage) rồi chọn MỘT từ tiếng Anh (đúng loại từ partOfSpeech) khớp tình huống. Câu đạt: tình huống trỏ duy nhất tới đáp án, không chứa/không dịch lộ đáp án, không viết như định nghĩa từ điển; <optionCount-1> distractor cùng loại từ nhưng chắc chắn sai với tình huống này (không phải đồng nghĩa / rộng hơn / hẹp hơn).`,
 
-  synonym: `STRUCTURE ("synonym") — pick the English word that is a synonym OR antonym of a given word.
-- Learner sees — STEM: \`word\` plus the task from \`questionType\` (client shows: "Từ nào là {đồng nghĩa|trái nghĩa} của \\"<word>\\"?"). OPTIONS: <optionCount> ENGLISH words = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled).
-- \`questionType\` = "synonym" | "antonym" — tells the learner which relation to pick. This is the TASK, not an option.
-- \`correctAnswer\` = the correct answer — a single ENGLISH word that truly is the \`questionType\` (synonym/antonym) of \`word\`.
-- \`wrongAnswers\` = distractors — ENGLISH words, same part of speech as \`correctAnswer\`, NOT a \`questionType\` of \`word\` in any context. Exactly <optionCount-1> items.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] gives \`wrongAnswers\`[i]'s meaning and why it is not the required relation to \`word\`.
-- \`explanation\` = 1–2 Vietnamese sentences: meaning of \`word\` + why \`correctAnswer\` is the true synonym/antonym. \`exampleSentence\`/\`exampleTranslation\` = English sentence using the ORIGINAL \`word\` (not \`correctAnswer\`) + translation.
-- Metadata (NOT an option): \`partOfSpeech\`.
-- Invariants: \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`.`,
+  synonym: `LOẠI "synonym": người học thấy một từ + yêu cầu tìm đồng nghĩa HOẶC trái nghĩa (theo questionType) trong <optionCount> lựa chọn. Câu đạt: đáp án đúng thật sự là quan hệ được yêu cầu; <optionCount-1> distractor cùng loại từ nhưng KHÔNG phải quan hệ đó ở bất kỳ nghĩa nào. Mỗi distractor có một câu giải thích.`,
 
-  slang: `STRUCTURE ("slang") — test the Vietnamese meaning of an English slang term.
-- Learner sees — STEM: \`slang\` (client shows: "Slang \\"<slang>\\" có nghĩa là gì?"). OPTIONS: <optionCount> Vietnamese meanings = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled).
-- \`correctAnswer\` = the correct answer — VIETNAMESE meaning reflecting real contemporary usage.
-- \`wrongAnswers\` = distractors — VIETNAMESE meanings that sound like plausible slang meanings but are entirely wrong (no overlap/paraphrase). Exactly <optionCount-1> items.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] contrasts \`wrongAnswers\`[i] with the real meaning of \`slang\`.
-- \`explanation\` = 1–2 casual Vietnamese sentences: real meaning + who/where it's used. \`exampleSentence\`/\`exampleTranslation\` = authentic texting/social-media English sentence + translation.
-- Metadata (NOT an option): \`partOfSpeech\`.
-- Invariants: \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`.`,
+  slang: `LOẠI "slang": người học thấy một từ lóng tiếng Anh và chọn nghĩa tiếng Việt đúng theo cách dùng hiện đại. Câu đạt: đáp án phản ánh nghĩa lóng thực tế; <optionCount-1> distractor nghe hợp lý nhưng sai hẳn (không trùng/không diễn giải lại). Mỗi distractor có một câu giải thích.`,
 
-  'odd-one-out': `STRUCTURE ("odd-one-out") — pick the ONE word that does not belong with the others. (This type inverts the usual layout.)
-- Learner sees — STEM: the task "Từ nào KHÔNG thuộc nhóm với các từ còn lại?". OPTIONS: <optionCount> ENGLISH words = \`groupWords\` ∪ {\`oddWord\`} (shuffled).
-- \`oddWord\` = the CORRECT ANSWER — a single ENGLISH word from a COMPLETELY different domain than the group (zero overlap). It is NOT in \`groupWords\`.
-- \`groupWords\` = the distractors — ENGLISH words that all clearly belong together (share the group's category). Exactly <optionCount-1> items.
-- \`groupWordExplanations\` = one Vietnamese sentence per \`groupWords\` item, SAME count & order; [i] gives \`groupWords\`[i]'s meaning + what it is/does. (There is NO per-option explanation array for \`oddWord\`.)
-- \`groupTheme\` = short English label of what the group shares — INTERNAL, must NOT be repeated inside \`explanation\`/\`groupWordExplanations\`.
-- \`explanation\` = EXACTLY 2 Vietnamese sentences: (1) what the group words have in common by function; (2) \`oddWord\`'s meaning and why it has nothing to do with the group.
-- \`exampleSentence\`/\`exampleTranslation\` = English sentence using \`oddWord\` + translation.
-- Invariants: \`groupWords.length === groupWordExplanations.length === optionCount - 1\`; \`oddWord\` is not equal to and does not prefix-overlap any \`groupWords\` item (case-insensitive); on-screen options = <optionCount>.`,
+  'odd-one-out': `LOẠI "odd-one-out": người học thấy <optionCount> từ tiếng Anh và chọn từ KHÔNG cùng nhóm. Câu đạt: <optionCount-1> từ trong nhóm (groupWords) rõ ràng chung một phạm trù, còn oddWord thuộc phạm trù hoàn toàn khác (không trùng, không cùng gốc). Mỗi từ trong nhóm có một câu giải thích tương ứng theo thứ tự; oddWord KHÔNG có mảng giải thích riêng.`,
 
-  paragraph: `STRUCTURE ("paragraph") — read a short English paragraph and choose the statement that is TRUE about it.
-- Learner sees — CONTEXT: \`paragraph\` (4–7 English sentences) with \`translation\` (full Vietnamese) shown. STEM: "Nhận định nào dưới đây ĐÚNG với đoạn văn?". OPTIONS: <optionCount> ENGLISH statements = [\`correctStatement\`, ...\`wrongStatements\`] (shuffled).
-- \`correctStatement\` = the correct answer — a full ENGLISH statement directly verifiable from one explicit sentence of \`paragraph\`, reworded (not copied), unambiguously true.
-- \`wrongStatements\` = distractors — full ENGLISH statements, each 100% FALSE vs the paragraph, similar in length/style to \`correctStatement\`. Exactly <optionCount-1> items.
-- \`wrongStatementExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] names the specific paragraph fact/sentence that contradicts \`wrongStatements\`[i].
-- \`explanation\` = 1–2 Vietnamese sentences: why \`correctStatement\` is true + cite the confirming sentence.
-- \`translation\` = full Vietnamese translation of \`paragraph\` (single string, no literal newlines).
-- No \`exampleSentence\`. Invariants: \`wrongStatements.length === wrongStatementExplanations.length === optionCount - 1\`; \`paragraph\` contains no text that looks like an answer option.`,
+  paragraph: `LOẠI "paragraph": người học đọc một đoạn văn tiếng Anh ngắn (4–7 câu) rồi chọn nhận định ĐÚNG với đoạn trong <optionCount> lựa chọn. Câu đạt: đáp án kiểm chứng được trực tiếp từ một câu cụ thể trong đoạn (diễn đạt lại, không chép nguyên); <optionCount-1> distractor mỗi cái 100% SAI so với đoạn, dài/giọng văn tương đương. Mỗi distractor có một câu giải thích trỏ tới dữ kiện phản bác.`,
 
-  idiom: `STRUCTURE ("idiom") — test the Vietnamese figurative meaning of an English idiom.
-- Learner sees — STEM: \`idiom\` (client shows: "Idiom \\"<idiom>\\" có nghĩa là gì?"). OPTIONS: <optionCount> Vietnamese meanings = [\`correctAnswer\`, ...\`wrongAnswers\`] (shuffled).
-- \`correctAnswer\` = the correct answer — VIETNAMESE FIGURATIVE meaning of the WHOLE idiom (not word-by-word).
-- \`wrongAnswers\` = distractors — VIETNAMESE meanings belonging to COMPLETELY DIFFERENT idioms/expressions (no partial/paraphrase overlap). Exactly <optionCount-1> items.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] contrasts \`wrongAnswers\`[i] with the real meaning of the idiom.
-- \`explanation\` = 1–2 casual Vietnamese sentences: real idiomatic meaning + usage context. \`exampleSentence\`/\`exampleTranslation\` = authentic English sentence containing the idiom verbatim + translation.
-- Invariants: \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`.`,
+  idiom: `LOẠI "idiom": người học thấy một thành ngữ tiếng Anh và chọn nghĩa BÓNG tiếng Việt đúng. Câu đạt: đáp án là nghĩa bóng của cả thành ngữ (không dịch từng chữ); <optionCount-1> distractor là nghĩa của thành ngữ khác hẳn. Mỗi distractor có một câu giải thích.`,
 
-  'verb-use-match': `STRUCTURE ("verb-use-match") — pick the natural verb+noun collocation. Behaviour depends on \`format\`.
-- \`format\` = "fill-blank": STEM = \`sentence\` (contains "___" where only the VERB is removed); OPTIONS = <optionCount> ENGLISH verbs = [\`verb\`, ...\`wrongAnswers\`] (shuffled); \`wrongAnswers\` are wrong VERBS.
-- \`format\` = "phrase-choice": STEM = \`sentence\` (a question like "Which phrase sounds most natural?", NO "___"); OPTIONS = <optionCount> ENGLISH phrases = [\`targetPhrase\`, ...\`wrongAnswers\`] (shuffled); \`wrongAnswers\` are wrong FULL phrases (wrong verb + same noun).
-- \`targetPhrase\` = the correct collocation as a full phrase (e.g. "make a decision"). \`verb\` = verb part only; \`noun\` = noun/object part only. There is no \`correctAnswer\` field.
-- \`wrongAnswerExplanations\` = one Vietnamese sentence per distractor, SAME count & order; [i] says what \`wrongAnswers\`[i] normally collocates with and why \`targetPhrase\` is the natural choice.
-- \`explanation\` = 1–2 casual Vietnamese sentences about why this verb+noun sounds natural. \`exampleSentence\`/\`exampleTranslation\` = authentic English sentence using \`targetPhrase\` verbatim + translation.
-- Metadata (NOT an option): \`format\`, \`verb\`, \`noun\`.
-- Invariants: \`wrongAnswers.length === wrongAnswerExplanations.length === optionCount - 1\`; \`format="fill-blank"\` ⇒ \`sentence\` contains "___"; \`format="phrase-choice"\` ⇒ \`sentence\` has no "___"; \`verb\` + " " + \`noun\` should equal \`targetPhrase\` (modulo spacing/articles).`
+  'verb-use-match': `LOẠI "verb-use-match": chọn collocation động từ + danh từ tự nhiên. Nếu format = "fill-blank": câu có "___" ở chỗ ĐỘNG TỪ, lựa chọn là các động từ, đáp án là verb đúng. Nếu format = "phrase-choice": câu không có "___", lựa chọn là các cụm đầy đủ (sai động từ + cùng danh từ), đáp án là targetPhrase. Câu đạt: chỉ một collocation nghe tự nhiên; <optionCount-1> distractor collocate với danh từ khác. Mỗi distractor có một câu giải thích.`
 };
 
 // ─── Learner-view renderer ───────────────────────────────────────────────────
@@ -126,82 +45,209 @@ function asStringArray(v: unknown): string[] {
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 
-function renderOptions(correct: string, wrongs: string[]): string {
-  const all = [correct, ...wrongs].filter((s) => s.length > 0);
-  const lines = all.map((opt, i) => `${LETTERS[i] ?? String(i + 1)}. ${opt}`);
-  return `${lines.join('\n')}\nĐÁP ÁN ĐÚNG: A  (${correct})`;
+/** FNV-1a 32-bit — seed ổn định cho shuffle (cùng câu → cùng layout, dễ debug/diff). */
+function hashSeed(str: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** Fisher–Yates với LCG deterministic — KHÔNG dùng Math.random để review lặp lại giống nhau. */
+function seededShuffle<T>(arr: T[], seed: number): T[] {
+  const a = [...arr];
+  let s = seed >>> 0;
+  const rnd = () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
+
+/** Một ô lựa chọn sau khi trộn. `srcIndex` = -1 nếu là đáp án đúng, ngược lại là index trong mảng distractor gốc. */
+export interface OptionSlot {
+  letter: string;
+  text: string;
+  isCorrect: boolean;
+  srcIndex: number;
+}
+
+interface TypeOptions {
+  correctText: string;
+  wrongs: string[];
+  wrongExplanations: string[];
+  optionTranslations: string[];
+  correctAnswerTranslation: string;
+}
+
+/** Bóc đáp án / distractor / mảng song song theo quizType. */
+function extractOptions(quizType: QuizType, d: Record<string, unknown>): TypeOptions {
+  const base: TypeOptions = {
+    correctText: asString(d.correctAnswer),
+    wrongs: asStringArray(d.wrongAnswers),
+    wrongExplanations: asStringArray(d.wrongAnswerExplanations),
+    optionTranslations: asStringArray(d.optionTranslations),
+    correctAnswerTranslation: asString(d.correctAnswerTranslation)
+  };
+
+  switch (quizType) {
+    case 'odd-one-out':
+      return {
+        ...base,
+        correctText: asString(d.oddWord),
+        wrongs: asStringArray(d.groupWords),
+        wrongExplanations: asStringArray(d.groupWordExplanations)
+      };
+    case 'paragraph':
+      return {
+        ...base,
+        correctText: asString(d.correctStatement),
+        wrongs: asStringArray(d.wrongStatements),
+        wrongExplanations: asStringArray(d.wrongStatementExplanations)
+      };
+    case 'verb-use-match':
+      return {
+        ...base,
+        correctText: asString(d.format) === 'fill-blank' ? asString(d.verb) : asString(d.targetPhrase)
+      };
+    default:
+      return base;
+  }
+}
+
+/** Dựng danh sách ô lựa chọn đã trộn (đáp án KHÔNG cố định ở A). */
+function buildOptionLayout(quizType: QuizType, opts: TypeOptions): OptionSlot[] {
+  const raw = [
+    { text: opts.correctText, isCorrect: true, srcIndex: -1 },
+    ...opts.wrongs.map((text, i) => ({ text, isCorrect: false, srcIndex: i }))
+  ].filter((slot) => slot.text.length > 0);
+
+  const seed = hashSeed(`${quizType}|${opts.correctText}|${opts.wrongs[0] ?? ''}|${opts.wrongs.length}`);
+  return seededShuffle(raw, seed).map((slot, i) => ({ ...slot, letter: LETTERS[i] ?? String(i + 1) }));
+}
+
+function renderStem(quizType: QuizType, d: Record<string, unknown>): string {
+  switch (quizType) {
+    case 'vocab':
+      return `STEM: "${asString(d.word)}" có nghĩa là gì?`;
+    case 'phrase':
+      return `STEM: Cụm từ "${asString(d.phrase)}" có nghĩa là gì?`;
+    case 'slang':
+      return `STEM: Slang "${asString(d.slang)}" có nghĩa là gì?`;
+    case 'idiom':
+      return `STEM: Idiom "${asString(d.idiom)}" có nghĩa là gì?`;
+    case 'fillblank':
+      return `STEM (điền vào ___): ${asString(d.sentence)}`;
+    case 'conversation':
+      return `HỘI THOẠI (một dòng có ___):\n${asStringArray(d.dialogueLines).join('\n') || asString(d.sentence)}`;
+    case 'description':
+      return `MÔ TẢ (ngôn ngữ: ${asString(d.descriptionLanguage) || '?'}): ${asString(d.description)}\nSTEM: Từ tiếng Anh nào phù hợp nhất với tình huống này?\nLoại từ cần chọn: ${asString(d.partOfSpeech)}`;
+    case 'synonym': {
+      const rel = asString(d.questionType) === 'antonym' ? 'trái nghĩa' : 'đồng nghĩa';
+      return `STEM: Từ nào là ${rel} của "${asString(d.word)}"?\nLoại từ: ${asString(d.partOfSpeech)}`;
+    }
+    case 'odd-one-out':
+      return `STEM: Từ nào KHÔNG thuộc nhóm với các từ còn lại?`;
+    case 'paragraph':
+      return `ĐOẠN VĂN: ${asString(d.paragraph)}\nSTEM: Nhận định nào dưới đây ĐÚNG với đoạn văn?`;
+    case 'verb-use-match':
+      return asString(d.format) === 'fill-blank'
+        ? `STEM (điền ĐỘNG TỪ vào ___): ${asString(d.sentence)}`
+        : `STEM: ${asString(d.sentence) || 'Cụm từ nào nghe tự nhiên nhất?'}`;
+    default:
+      return `STEM: (không dựng được learner view cho quizType "${quizType}")`;
+  }
 }
 
 /**
- * Dựng lại "màn hình người làm bài" từ questionData đã parse, để review model
- * nhìn câu hỏi bằng mắt người học thay vì đọc JSON thô. Defensive — field thiếu
- * thì bỏ qua, không throw.
+ * Dựng "màn hình người làm bài" từ questionData đã parse: đề + <optionCount> lựa chọn
+ * ĐÃ TRỘN, KHÔNG lộ đâu là đáp án. Trả kèm `layout` để buildAnswerKey ánh xạ giải
+ * thích/bản dịch distractor theo đúng letter. Defensive — field thiếu thì bỏ qua.
  */
-export function renderLearnerView(quizType: QuizType, data: Record<string, unknown>): string {
+export function buildLearnerView(
+  quizType: QuizType,
+  data: Record<string, unknown>
+): { view: string; layout: OptionSlot[] } {
   const d = data ?? {};
-  const stemHead = '=== ĐỀ BÀI (người học đọc) ===';
-  const optHead = '=== CÁC PHƯƠNG ÁN (đã trộn — người học KHÔNG biết đâu là đáp án đúng) ===';
+  const opts = extractOptions(quizType, d);
+  const layout = buildOptionLayout(quizType, opts);
+  const optionLines = layout.map((slot) => `${slot.letter}. ${slot.text}`).join('\n');
+
+  const view =
+    `=== ĐỀ BÀI (người học đọc — CHƯA biết đáp án) ===\n${renderStem(quizType, d)}\n\n` +
+    `=== CÁC PHƯƠNG ÁN (đã xáo trộn — tự chọn trước khi xem đáp án) ===\n${optionLines}`;
+
+  return { view, layout };
+}
+
+/**
+ * Khối đáp án + giải thích — chỉ đọc SAU khi đã tự giải ở STEP 1. Render dạng người
+ * đọc (không phải JSON). Giải thích/bản dịch distractor được ánh xạ theo letter đã trộn.
+ */
+export function buildAnswerKey(quizType: QuizType, data: Record<string, unknown>, layout: OptionSlot[]): string {
+  const d = data ?? {};
+  const opts = extractOptions(quizType, d);
+  const correct = layout.find((s) => s.isCorrect);
+  const lines: string[] = ['=== ĐÁP ÁN & GIẢI THÍCH (chỉ đọc SAU khi đã tự giải ở STEP 1) ==='];
+
+  lines.push(`Đáp án đúng: ${correct?.letter ?? '?'} — ${opts.correctText}`);
+  const explanation = asString(d.explanation);
+  if (explanation) lines.push(`Giải thích (explanation): ${explanation}`);
+
+  for (const slot of layout.filter((s) => !s.isCorrect)) {
+    const why = opts.wrongExplanations[slot.srcIndex] ?? '(thiếu giải thích cho phương án này)';
+    const gloss = opts.optionTranslations[slot.srcIndex];
+    lines.push(`Vì sao "${slot.letter}" sai: ${why}${gloss ? ` (nghĩa: ${gloss})` : ''}`);
+  }
 
   switch (quizType) {
+    case 'fillblank':
+    case 'conversation':
+      if (asString(d.sentenceTranslation))
+        lines.push(`Bản dịch câu (đã điền đáp án): ${asString(d.sentenceTranslation)}`);
+      if (asString(d.highlightedWord))
+        lines.push(`Từ nhấn trong bản dịch (highlightedWord): ${asString(d.highlightedWord)}`);
+      if (opts.correctAnswerTranslation)
+        lines.push(`Nghĩa đáp án (correctAnswerTranslation): ${opts.correctAnswerTranslation}`);
+      break;
+    case 'description':
+      lines.push(
+        `Loại từ (partOfSpeech): ${asString(d.partOfSpeech)} · ngôn ngữ mô tả: ${asString(d.descriptionLanguage)}`
+      );
+      break;
+    case 'synonym':
+      lines.push(`Quan hệ cần tìm (questionType): ${asString(d.questionType)} · loại từ: ${asString(d.partOfSpeech)}`);
+      break;
+    case 'odd-one-out':
+      lines.push(`Nhóm chung (groupTheme — người học KHÔNG thấy): ${asString(d.groupTheme)}`);
+      break;
+    case 'paragraph':
+      if (asString(d.translation)) lines.push(`Bản dịch đoạn văn: ${asString(d.translation)}`);
+      break;
+    case 'verb-use-match':
+      lines.push(
+        `Dạng (format): ${asString(d.format)} · collocation đúng (targetPhrase): ${asString(d.targetPhrase)} · verb: ${asString(d.verb)} · noun: ${asString(d.noun)}`
+      );
+      break;
     case 'vocab':
     case 'phrase':
     case 'slang':
-    case 'idiom': {
-      const key = quizType === 'vocab' ? 'word' : quizType === 'phrase' ? 'phrase' : quizType;
-      const stemWord = asString(d[key]);
-      const label =
-        quizType === 'vocab'
-          ? `"${stemWord}" có nghĩa là gì?`
-          : quizType === 'phrase'
-            ? `Cụm từ "${stemWord}" có nghĩa là gì?`
-            : quizType === 'slang'
-              ? `Slang "${stemWord}" có nghĩa là gì?`
-              : `Idiom "${stemWord}" có nghĩa là gì?`;
-      return `${stemHead}\nSTEM: ${label}\n\n${optHead}\n${renderOptions(asString(d.correctAnswer), asStringArray(d.wrongAnswers))}`;
-    }
-
-    case 'fillblank': {
-      const sentence = asString(d.sentence);
-      const tr = asString(d.sentenceTranslation);
-      return `${stemHead}\nSTEM (điền vào ___): ${sentence}\nBản dịch: ${tr}\nTừ được nhấn: ${asString(d.highlightedWord)}\n\n${optHead}\n${renderOptions(asString(d.correctAnswer), asStringArray(d.wrongAnswers))}`;
-    }
-
-    case 'conversation': {
-      const lines = asStringArray(d.dialogueLines).join('\n');
-      const tr = asString(d.sentenceTranslation);
-      return `${stemHead}\nHỘI THOẠI (điền vào ___):\n${lines}\nBản dịch: ${tr}\nTừ được nhấn: ${asString(d.highlightedWord)}\n\n${optHead}\n${renderOptions(asString(d.correctAnswer), asStringArray(d.wrongAnswers))}`;
-    }
-
-    case 'description': {
-      const desc = asString(d.description);
-      return `${stemHead}\nMÔ TẢ (ngôn ngữ: ${asString(d.descriptionLanguage) || '?'}): ${desc}\nSTEM: Từ tiếng Anh nào phù hợp nhất với tình huống này?\nLoại từ cần chọn: ${asString(d.partOfSpeech)}\n\n${optHead}\n${renderOptions(asString(d.correctAnswer), asStringArray(d.wrongAnswers))}`;
-    }
-
-    case 'synonym': {
-      const rel = asString(d.questionType) === 'antonym' ? 'trái nghĩa' : 'đồng nghĩa';
-      return `${stemHead}\nSTEM: Từ nào là ${rel} của "${asString(d.word)}"?\nLoại từ: ${asString(d.partOfSpeech)}\n\n${optHead}\n${renderOptions(asString(d.correctAnswer), asStringArray(d.wrongAnswers))}`;
-    }
-
-    case 'odd-one-out': {
-      return `${stemHead}\nSTEM: Từ nào KHÔNG thuộc nhóm với các từ còn lại?\n(nhóm chung — chỉ để tham khảo, người học không thấy: ${asString(d.groupTheme)})\n\n${optHead}\n${renderOptions(asString(d.oddWord), asStringArray(d.groupWords))}`;
-    }
-
-    case 'paragraph': {
-      return `${stemHead}\nĐOẠN VĂN: ${asString(d.paragraph)}\nBản dịch: ${asString(d.translation)}\nSTEM: Nhận định nào dưới đây ĐÚNG với đoạn văn?\n\n${optHead}\n${renderOptions(asString(d.correctStatement), asStringArray(d.wrongStatements))}`;
-    }
-
-    case 'verb-use-match': {
-      const isFillBlank = asString(d.format) === 'fill-blank';
-      const correct = isFillBlank
-        ? asString(d.verb)
-        : asString(d.targetPhrase) || `${asString(d.verb)} ${asString(d.noun)}`.trim();
-      const stem = isFillBlank
-        ? `STEM (điền động từ vào ___): ${asString(d.sentence)}`
-        : `STEM: ${asString(d.sentence) || 'Phrase nào tự nhiên nhất?'}`;
-      return `${stemHead}\nDạng: ${asString(d.format)} · collocation đúng: ${asString(d.targetPhrase)}\n${stem}\n\n${optHead}\n${renderOptions(correct, asStringArray(d.wrongAnswers))}`;
-    }
-
+    case 'idiom':
+      if (asString(d.partOfSpeech)) lines.push(`Loại từ (partOfSpeech): ${asString(d.partOfSpeech)}`);
+      break;
     default:
-      return `${stemHead}\n(không dựng được learner view cho quizType "${quizType}")`;
+      break;
   }
+
+  const example = asString(d.exampleSentence);
+  if (example)
+    lines.push(`Câu ví dụ: ${example}${asString(d.exampleTranslation) ? ` — ${asString(d.exampleTranslation)}` : ''}`);
+
+  return lines.join('\n');
 }

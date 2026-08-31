@@ -16,7 +16,7 @@ import {
 import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
 import { runWithConcurrency } from '@/utils/concurrency';
 import { buildReviewPrompt, type ReviewContext } from './prompt/review-prompt';
-import { renderLearnerView } from './prompt/review-type-spec';
+import { buildAnswerKey, buildLearnerView } from './prompt/review-type-spec';
 import type { DifficultyContext } from './prompt/vocab-prompt';
 import questionPoolService from './questionPool.service';
 import type { QuizType } from './questionTypes';
@@ -65,13 +65,17 @@ const QUESTION_SCHEMA_BY_TYPE: Partial<Record<QuizType, z.ZodTypeAny>> = {
 
 // ─── Structured output schema ────────────────────────────────────────────────
 
-// 10 cờ AI trả (true = có vấn đề trong bản gốc). `formatValid` do service tự set sau.
+// 14 cờ AI trả (true = có vấn đề trong bản gốc). `formatValid` do service tự set sau.
 const ReviewChecklistAiSchema = z.object({
   notSolvable: z.boolean(),
   insufficientContext: z.boolean(),
   multipleDefensibleAnswers: z.boolean(),
   answerIncorrect: z.boolean(),
+  optionsFormInconsistent: z.boolean(),
+  requiresOutsideKnowledge: z.boolean(),
+  solvedAnswerMismatch: z.boolean(),
   explanationMismatch: z.boolean(),
+  explanationDoesNotDeriveAnswer: z.boolean(),
   distractorExplanationMismatch: z.boolean(),
   translationMismatch: z.boolean(),
   spellingOrGrammarError: z.boolean(),
@@ -86,10 +90,18 @@ const ReviewIssueSchema = z.object({
   fix: z.string()
 });
 
+// AI tự giải đề ở STEP 1 khi chưa thấy đáp án — ép model thật sự làm bài, không review qua loa.
+const SelfSolveSchema = z.object({
+  pickedLetter: z.string(),
+  confidence: z.enum(['high', 'medium', 'low']),
+  reasoning: z.string()
+});
+
 const PoolReviewResultSchema = z.object({
   verdict: z.enum(POOL_REVIEW_VERDICTS),
   summary: z.string(),
   score: z.number().min(0).max(100),
+  selfSolve: SelfSolveSchema,
   checklist: ReviewChecklistAiSchema,
   issues: z.array(ReviewIssueSchema),
   // Shape phụ thuộc quizType — validate chặt lại bằng QUESTION_SCHEMA_BY_TYPE sau khi có kết quả.
@@ -187,14 +199,17 @@ async function reviewOne(
       topicName: item.topicName
     };
 
-    const learnerView = renderLearnerView(quizType, original as Record<string, unknown>);
+    const { view, layout } = buildLearnerView(quizType, original as Record<string, unknown>);
+    const answerKey = buildAnswerKey(quizType, original as Record<string, unknown>, layout);
     const { data, usage } = await generateStructuredOutput(PoolReviewResultSchema, {
       model: resolved.model,
       provider: resolved.provider,
       instructions: buildReviewPrompt(quizType, ctx, { adminNote: adminNote ?? undefined }),
-      input: `${learnerView}\n\n=== RAW JSON (trả revisedData đúng shape này) ===\n${JSON.stringify(original)}`,
+      input:
+        `${view}\n\n${answerKey}\n\n` +
+        `=== RAW JSON (chỉ để biết shape trả revisedData — KHÔNG dùng làm nội dung đề) ===\n${JSON.stringify(original)}`,
       temperature: 0.3,
-      maxOutputTokens: 4000
+      maxOutputTokens: 6000
     });
 
     const perTypeSchema = QUESTION_SCHEMA_BY_TYPE[quizType];
@@ -206,12 +221,14 @@ async function reviewOne(
     >;
 
     const checklist: PoolReviewChecklist = { ...data.checklist, formatValid };
+    const { pickedLetter, confidence } = data.selfSolve;
+    const summary = `AI tự giải: ${pickedLetter || '?'} (${confidence}). ${data.summary}`.trim();
 
     await insertReviewRow({
       ...snapshot,
       revisedData: JSON.stringify(revisedForStorage),
       verdict: data.verdict,
-      summary: data.summary,
+      summary,
       score: Math.round(data.score),
       checklist,
       issues: data.issues,

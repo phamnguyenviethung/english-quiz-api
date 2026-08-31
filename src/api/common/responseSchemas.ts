@@ -232,10 +232,20 @@ export const PoolModelStatSchema = t.Object({
 // Mọi cờ = "vấn đề CÓ trong bản gốc" (true = xấu), trừ `formatValid` (true = tốt).
 export const PoolReviewChecklistSchema = t.Object({
   notSolvable: t.Boolean({ description: 'Người học ở level này không giải được từ đề + options.' }),
-  insufficientContext: t.Boolean({ description: 'Thiếu dữ kiện / phải đoán / cần kiến thức ngoài.' }),
+  insufficientContext: t.Boolean({
+    description: 'Không có manh mối chốt đúng 1 option / distractor gần nghĩa cũng lọt.'
+  }),
   multipleDefensibleAnswers: t.Boolean({ description: 'Có ≥2 phương án hợp lý.' }),
   answerIncorrect: t.Boolean({ description: 'Đáp án đúng thực ra sai.' }),
-  explanationMismatch: t.Boolean({ description: '`explanation` không khớp đáp án đúng.' }),
+  optionsFormInconsistent: t.Boolean({
+    description: 'Options lệch loại từ / độ dài / dạng ngữ pháp / ngôn ngữ, hoặc không điền được vào chỗ trống.'
+  }),
+  requiresOutsideKnowledge: t.Boolean({ description: 'Phải biết dữ kiện ngoài câu / vượt level mới chọn được.' }),
+  solvedAnswerMismatch: t.Boolean({ description: 'Đáp án AI tự giải ra khác đáp án được gán.' }),
+  explanationMismatch: t.Boolean({ description: '`explanation` mâu thuẫn / mô tả option khác.' }),
+  explanationDoesNotDeriveAnswer: t.Boolean({
+    description: 'Theo đề + `explanation` vẫn không dẫn tới đúng option được gán.'
+  }),
   distractorExplanationMismatch: t.Boolean({
     description: 'Giải thích phương án sai lệch index / sai đối tượng / chung chung.'
   }),

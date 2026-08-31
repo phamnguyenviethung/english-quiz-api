@@ -8,10 +8,11 @@ Vòng **AI review + admin approve** cho từng câu trong `english_question_pool
 2. Với mỗi câu (fire-and-forget, bounded concurrency 3):
    - Load item (`questionPoolService.getPoolQuestionById`), parse `questionData`.
    - Resolve model review theo context **`manual`** (`resolveStudyModel('manual', model?)`).
-   - Dựng learner view: **`renderLearnerView(quizType, data)`** (`prompt/review-type-spec.ts`) — dựng lại "màn hình người làm bài" (đề + list options A/B/C/D + đáp án đúng).
-   - Dựng prompt review: **`buildReviewPrompt(quizType, ctx, { adminNote })`** (`src/core/services/english/prompt/review-prompt.ts`) — **KHÔNG** nhồi prompt sinh câu hỏi. Gồm: level note (chỉ mô tả A1–B2, không "EXPERT MODE") + **`QUIZ_TYPE_REVIEW_SPEC[quizType]`** (mô tả cấu trúc JSON + người học thấy gì) + rubric 8 mục soi theo góc nhìn người làm bài (solvable / đủ context / 1 đáp án / chính tả-ngữ pháp / explanation khớp đáp án / giải thích distractor khớp index / bản dịch khớp / format) + **EDIT DISCIPLINE** (chỉ sửa chỗ hỏng, câu tốt trả `pass` + `revisedData` y hệt) + `adminNote` block (nếu có).
-   - `input` = learner view + `\n\n=== RAW JSON ===\n` + `JSON.stringify(original)`.
-   - `generateStructuredOutput(PoolReviewResultSchema, ..., maxOutputTokens: 4000)` → `{ verdict, summary, score, checklist, issues, revisedData }`.
+   - Dựng learner view: **`buildLearnerView(quizType, data)`** (`prompt/review-type-spec.ts`) — dựng "màn hình người làm bài": đề + list options **đã xáo trộn** (seeded, đáp án KHÔNG cố định ở A) và **KHÔNG lộ đâu là đáp án**. Trả kèm `layout` (map letter → option gốc).
+   - Dựng answer key: **`buildAnswerKey(quizType, data, layout)`** — khối `ĐÁP ÁN & GIẢI THÍCH` dạng người đọc (đáp án đúng theo letter đã trộn + explanation + "vì sao X sai" + bản dịch + ví dụ + metadata). Giải thích/bản dịch distractor ánh xạ theo letter đã trộn.
+   - Dựng prompt review: **`buildReviewPrompt(quizType, ctx, { adminNote })`** (`src/core/services/english/prompt/review-prompt.ts`) — **KHÔNG** nhồi prompt sinh câu hỏi. Gồm: level note (chỉ mô tả A1–B2, không "EXPERT MODE") + **`QUIZ_TYPE_REVIEW_SPEC[quizType]`** (giờ là **văn xuôi ngắn** mô tả loại quiz cho người review, không phải liệt kê field JSON) + **quy trình 3 bước**: STEP 1 tự giải khi chưa thấy đáp án (chốt 1 letter + confidence) → STEP 2 đối chiếu letter với đáp án gán (`solvedAnswerMismatch`) → STEP 3 checklist 13 mục + luật FORMAT + **EDIT DISCIPLINE** (chỉ sửa chỗ hỏng, câu tốt trả `pass` + `revisedData` byte-identical) + **ANTI-SHALLOW** (mỗi cờ true phải có `issues[]` trích nguyên văn đoạn lỗi; cấm nhận xét chung chung; `issues` rỗng ⟺ mọi cờ false) + `adminNote` block (nếu có).
+   - `input` = learner view + `\n\n` + answer key + `\n\n=== RAW JSON (chỉ để biết shape trả revisedData) ===\n` + `JSON.stringify(original)`.
+   - `generateStructuredOutput(PoolReviewResultSchema, ..., maxOutputTokens: 6000)` → `{ verdict, summary, score, selfSolve, checklist, issues, revisedData }`. `selfSolve = { pickedLetter, confidence, reasoning }` được ghép làm tiền tố `summary` ("AI tự giải: X (confidence). …"), không lưu cột riêng.
    - Validate `revisedData` theo schema đúng `quizType` (`QUESTION_SCHEMA_BY_TYPE`, lấy từ `study.service.ts`) → set `checklist.formatValid`.
    - Tính `changedFields` = diff top-level key giữa original và revised (`_.isEqual`).
    - Ghi 1 row `english_question_pool_reviews` (`status='pending'`). Lỗi LLM/parse → row `status='failed'` + `errorMessage`, batch vẫn chạy tiếp.
@@ -33,9 +34,9 @@ Chỉ review `pending` mới approve/reject được. `POST /admin/pool/reviews`
 | `originalData`                                                    | text                                | JSON string snapshot `questionData` lúc review                             |
 | `revisedData`                                                     | text                                | JSON string bản sửa (`''` khi `failed`)                                    |
 | `verdict`                                                         | text                                | `pass` \| `revised` \| `reject` — kết luận AI về bản gốc (null khi failed) |
-| `summary`                                                         | text                                | 1-3 câu tiếng Việt                                                         |
+| `summary`                                                         | text                                | 1-3 câu tiếng Việt, có tiền tố "AI tự giải: X (confidence)."               |
 | `score`                                                           | int                                 | 0-100, chất lượng bản gốc                                                  |
-| `checklist`                                                       | jsonb `PoolReviewChecklist`         | 10 cờ AI trả (true = có vấn đề trong bản gốc) + `formatValid` (server set) |
+| `checklist`                                                       | jsonb `PoolReviewChecklist`         | 14 cờ AI trả (true = có vấn đề trong bản gốc) + `formatValid` (server set) |
 | `issues`                                                          | jsonb `PoolReviewIssue[]`           | `{ field, severity, problem, fix }`                                        |
 | `changedFields`                                                   | jsonb `string[]`                    | top-level field thực sự đổi (authoritative, type-agnostic)                 |
 | `status`                                                          | text                                | `pending` \| `approved` \| `rejected` \| `failed` — hành động admin        |
@@ -44,7 +45,7 @@ Chỉ review `pending` mới approve/reject được. `POST /admin/pool/reviews`
 | `resolvedByUserId` / `resolvedAt`                                 |                                     | Better Auth user id (text, không FK), set khi approve/reject               |
 | `createdAt` / `updatedAt`                                         | timestamp                           |                                                                            |
 
-`checklist` (11 cờ, true = có vấn đề trừ `formatValid` true = tốt): `notSolvable`, `insufficientContext`, `multipleDefensibleAnswers`, `answerIncorrect`, `explanationMismatch`, `distractorExplanationMismatch`, `translationMismatch`, `spellingOrGrammarError`, `offTopic`, `levelMismatch`, `formatValid`.
+`checklist` (15 cờ, true = có vấn đề trừ `formatValid` true = tốt): `notSolvable`, `insufficientContext`, `multipleDefensibleAnswers`, `answerIncorrect`, `optionsFormInconsistent` (options lệch loại từ / độ dài / dạng ngữ pháp / ngôn ngữ, hoặc không điền được vào chỗ trống — vd blank cần cụm 3 chữ nhưng options 1 chữ), `requiresOutsideKnowledge` (cần dữ kiện ngoài câu / vượt level), `solvedAnswerMismatch` (đáp án AI tự giải ra khác đáp án gán), `explanationMismatch`, `explanationDoesNotDeriveAnswer` (theo đề + `explanation` vẫn không dẫn tới đúng option gán), `distractorExplanationMismatch`, `translationMismatch`, `spellingOrGrammarError`, `offTopic`, `levelMismatch`, `formatValid`.
 
 ## Endpoints (`Admin / Pool Review`, session admin)
 
