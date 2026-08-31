@@ -44,6 +44,27 @@ export const QUIZ_TYPE_DEFINITIONS: QuizTypeDefinition[] = [
 
 const QUIZ_TYPE_DEFINITION_MAP = new Map(QUIZ_TYPE_DEFINITIONS.map((definition) => [definition.value, definition]));
 
+// Loại câu có một "term trung tâm" (từ/cụm/idiom/slang…) rõ ràng để khóa nguyên văn khi
+// sinh câu tương tự (sibling). `odd-one-out` (không có 1 term), `paragraph` (đọc hiểu, không
+// có term) và reading-* (không nằm trong pool) không hỗ trợ.
+export const SIBLING_SUPPORTED_QUIZ_TYPES = [
+  'vocab',
+  'phrase',
+  'idiom',
+  'slang',
+  'synonym',
+  'fillblank',
+  'conversation',
+  'description',
+  'verb-use-match'
+] as const;
+
+export type SiblingQuizType = (typeof SIBLING_SUPPORTED_QUIZ_TYPES)[number];
+
+export function isSiblingSupported(value: string): value is SiblingQuizType {
+  return (SIBLING_SUPPORTED_QUIZ_TYPES as readonly string[]).includes(value);
+}
+
 export function isQuizType(value: string): value is QuizType {
   return (QUIZ_TYPES as readonly string[]).includes(value);
 }

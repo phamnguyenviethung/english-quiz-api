@@ -22,6 +22,8 @@ import {
   PoolReviewPageSchema,
   PoolReviewEnqueueResultSchema,
   PoolReviewApproveResultSchema,
+  SiblingGenResultSchema,
+  SiblingSupportedTypeSchema,
   PublicApiKeySchema,
   IssuedApiKeySchema,
   TenantTopicAccessSchema,
@@ -664,6 +666,63 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       ...COMMON_ERRORS
     }
   })
+
+  // ── Pool sibling question ──────────────────────────────────────────────────
+  .get('/pool/siblings/supported-types', async () => ok(adminController.listSiblingSupportedTypes()), {
+    detail: {
+      tags: ['Admin / Pool Sibling'],
+      summary: 'List quizType hỗ trợ sinh câu tương tự',
+      description:
+        'Trả danh sách quizType có thể sinh sibling kèm nhãn và các field JSON được khóa nguyên văn từ câu gốc. ' +
+        `Loại không có trong danh sách (odd-one-out, paragraph, reading*) sẽ bị POST từ chối. ${ADMIN_AUTH_DESCRIPTION}`,
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(t.Array(SiblingSupportedTypeSchema)),
+      ...COMMON_ERRORS
+    }
+  })
+  .post(
+    '/pool/siblings/:id',
+    async ({ params, body, user }) => ok(await adminController.generatePoolSiblings(params.id, body, user.id)),
+    {
+      params: IdParam,
+      body: t.Object({
+        count: t.Integer({
+          minimum: 1,
+          maximum: 5,
+          description: 'Số câu tương tự cần sinh (1..5, cap theo batch schema của LLM).'
+        }),
+        model: t.Optional(
+          t.String({
+            description: 'OpenRouter model id. Bỏ trống → random trong pool `manualEnabled`.'
+          })
+        ),
+        adminNote: t.Optional(
+          t.String({
+            maxLength: 1000,
+            description: 'Ghi chú chèn vào prompt làm hướng sinh riêng cho các sibling này.'
+          })
+        )
+      }),
+      detail: {
+        tags: ['Admin / Pool Sibling'],
+        summary: 'Sinh câu tương tự từ một câu pool',
+        description:
+          'Dựa vào câu pool `:id` sinh tối đa `count` câu tương tự: giữ nguyên văn term cần học + độ khó + topic, ' +
+          'đổi mới ngữ cảnh / distractor / ví dụ / giải thích. Câu đạt schema được ghi THẲNG vào ' +
+          '`english_question_pool` (cột `sourceQuestionId` trỏ về câu gốc) — không có bước duyệt. Chạy đồng bộ. ' +
+          `Loại câu không hỗ trợ → 400. Xem docs/sibling-question.md. ${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(SiblingGenResultSchema),
+        400: ApiErrorSchema,
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
 
   // ── Reading passages ─────────────────────────────────────────────────────────
   // Bài đọc thuần sinh từ (topicName, cefrLevel). KHÁC `quizType = 'reading'` ở

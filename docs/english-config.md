@@ -134,6 +134,16 @@ Mỗi item có `name` (unique, dùng làm BullMQ `jobSchedulerId`) và `cron` (c
 
 Manual-fill (`/admin/pool/refill`) không có flag chặn — chủ động trigger, yêu cầu tài khoản admin nên không cần feature flag.
 
+### `sibling_gen` / `sibling_gen_schedule`
+
+Sinh "câu tương tự" tự động — chi tiết ở [`sibling-question.md`](./sibling-question.md).
+
+- `job_flags.siblingGenEnabled` (`boolean`, default `false`): bật cron `english-sibling-gen`. Sinh sibling **thủ công** (`POST /admin/pool/siblings/:id`) không phụ thuộc cờ này.
+- `sibling_gen.sourcesPerBucketPerRun` (`num`, default `2`): số câu gốc lấy mỗi bucket mỗi lần chạy.
+- `sibling_gen.siblingsPerSource` (`num`, default `3`, `max 5`): số sibling sinh mỗi câu gốc — chặn `max 5` ở Zod vì batch schema LLM cap `.max(5)`.
+- `sibling_gen.maxSiblingsPerRun` (`num`, default `40`): trần tổng sibling mỗi lần chạy auto.
+- `sibling_gen_schedule.items` (`arr`, default `[{ sibling-gen-daily, '0 3 * * *' }]`): giống `pool_refill_schedule`, reconcile scheduler ngay khi đổi.
+
 ### `reading_passage` / `reading_refill_schedule`
 
 Kho bài đọc. Chi tiết từng key ở [`reading-passage.md`](./reading-passage.md).
@@ -147,7 +157,7 @@ Hai key đáng chú ý:
 - `reading_question.questionsPerPassage` và `.perPassageGenerationCap` bị chặn `max 5` ngay ở Zod schema, vì batch schema của LLM cap `.max(5)` — đặt lớn hơn sẽ làm cả lần gọi model fail validation. `reading_passage.perBucketGenerationCap` **chưa** có ràng buộc này (bẫy còn tồn tại).
 - `job_flags.readingQuestionRefillMaxPerRun` tính theo **câu hỏi**, không phải bài đọc — mỗi bài ăn `questionsPerPassage` câu.
 
-Ba namespace có `path: 'items'` (`pool_refill_schedule`, `reading_refill_schedule`, `reading_question_refill_schedule`) cần thêm nhánh riêng trong `applyRecordValue()` ở `englishConfig.service.ts` — namespace dạng mảng không đi qua `assignPath()` được.
+Bốn namespace có `path: 'items'` (`pool_refill_schedule`, `sibling_gen_schedule`, `reading_refill_schedule`, `reading_question_refill_schedule`) cần thêm nhánh riêng trong `applyRecordValue()` ở `englishConfig.service.ts` — namespace dạng mảng không đi qua `assignPath()` được.
 
 ## 6. API
 

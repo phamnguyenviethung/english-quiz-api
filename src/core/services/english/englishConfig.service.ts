@@ -138,6 +138,10 @@ function applyRecordValue(raw: EnglishConfigSnapshot, def: EnglishConfigRecordDe
     raw.pool_refill_schedule = value as EnglishConfigSnapshot['pool_refill_schedule'];
     return;
   }
+  if (def.namespace === 'sibling_gen_schedule' && def.path === 'items') {
+    raw.sibling_gen_schedule = value as EnglishConfigSnapshot['sibling_gen_schedule'];
+    return;
+  }
   if (def.namespace === 'reading_refill_schedule' && def.path === 'items') {
     raw.reading_refill_schedule = value as EnglishConfigSnapshot['reading_refill_schedule'];
     return;

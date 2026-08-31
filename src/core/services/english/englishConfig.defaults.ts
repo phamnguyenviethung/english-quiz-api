@@ -59,6 +59,15 @@ const CronScheduleSchema = z
 export const PoolRefillScheduleSchema = CronScheduleSchema;
 export const ReadingRefillScheduleSchema = CronScheduleSchema;
 export const ReadingQuestionRefillScheduleSchema = CronScheduleSchema;
+export const SiblingGenScheduleSchema = CronScheduleSchema;
+
+// Sinh "câu tương tự" (sibling) tự động: quét bucket thiếu, lấy câu gốc sẵn có sinh biến thể.
+// siblingsPerSource cap ở 5 vì batch schema của LLM cap ở 5 item.
+export const SiblingGenSchema = z.object({
+  sourcesPerBucketPerRun: positiveIntSchema,
+  siblingsPerSource: z.number().int().min(1).max(5),
+  maxSiblingsPerRun: positiveIntSchema
+});
 
 export const ReadingPassageSchema = z
   .object({
@@ -119,7 +128,8 @@ export const JobFlagsSchema = z.object({
   readingRefillEnabled: z.boolean(),
   readingRefillMaxPerRun: positiveIntSchema,
   readingQuestionRefillEnabled: z.boolean(),
-  readingQuestionRefillMaxPerRun: positiveIntSchema
+  readingQuestionRefillMaxPerRun: positiveIntSchema,
+  siblingGenEnabled: z.boolean()
 });
 
 export const EnglishConfigSchemas = {
@@ -127,6 +137,8 @@ export const EnglishConfigSchemas = {
   quiz_distribution: QuizDistributionSchema,
   job_flags: JobFlagsSchema,
   pool_refill_schedule: PoolRefillScheduleSchema,
+  sibling_gen: SiblingGenSchema,
+  sibling_gen_schedule: SiblingGenScheduleSchema,
   reading_passage: ReadingPassageSchema,
   reading_refill_schedule: ReadingRefillScheduleSchema,
   reading_question: ReadingQuestionSchema,
@@ -164,13 +176,21 @@ export const EnglishConfigDefaults = {
     readingRefillMaxPerRun: 20,
     readingQuestionRefillEnabled: true,
     // Đơn vị là CÂU HỎI, không phải bài đọc — mỗi bài ăn 3 câu.
-    readingQuestionRefillMaxPerRun: 60
+    readingQuestionRefillMaxPerRun: 60,
+    // Mặc định TẮT — sinh sibling tự động là tính năng opt-in.
+    siblingGenEnabled: false
   },
   pool_refill_schedule: [
     { name: 'pool-refill-morning', cron: '0 5 * * *' },
     { name: 'pool-refill-noon', cron: '0 12 * * *' },
     { name: 'pool-refill-evening', cron: '0 20 * * *' }
   ],
+  sibling_gen: {
+    sourcesPerBucketPerRun: 2,
+    siblingsPerSource: 3,
+    maxSiblingsPerRun: 40
+  },
+  sibling_gen_schedule: [{ name: 'sibling-gen-daily', cron: '0 3 * * *' }],
   reading_passage: {
     maxPerBucket: 3,
     refillThresholdRatio: 0.5,
@@ -201,6 +221,7 @@ export type EnglishConfigKey = keyof typeof EnglishConfigDefaults;
 export type QuestionPoolConfig = z.infer<typeof QuestionPoolSchema>;
 export type QuizDistributionConfig = z.infer<typeof QuizDistributionSchema>;
 export type JobFlagsConfig = z.infer<typeof JobFlagsSchema>;
+export type SiblingGenConfig = z.infer<typeof SiblingGenSchema>;
 export type ReadingPassageConfig = z.infer<typeof ReadingPassageSchema>;
 export type ReadingQuestionConfig = z.infer<typeof ReadingQuestionSchema>;
 export type EnglishConfigSnapshot = {
@@ -358,6 +379,30 @@ const QUESTION_POOL_FIELDS: Record<keyof QuestionPoolConfig, ConfigFieldMeta> = 
     category: 'questions',
     sortOrder: 1130,
     schema: intField('Số luồng sinh song song', 1, undefined, 'luồng')
+  }
+};
+
+const SIBLING_GEN_FIELDS: Record<keyof SiblingGenConfig, ConfigFieldMeta> = {
+  sourcesPerBucketPerRun: {
+    label: 'Số câu gốc lấy mỗi bucket',
+    description: 'Mỗi lần chạy auto, với mỗi bucket thiếu lấy tối đa bao nhiêu câu gốc để sinh câu tương tự.',
+    category: 'questions',
+    sortOrder: 1300,
+    schema: intField('Số câu gốc lấy mỗi bucket', 1, undefined, 'câu')
+  },
+  siblingsPerSource: {
+    label: 'Số câu tương tự mỗi câu gốc',
+    description: 'Số biến thể sinh cho mỗi câu gốc trong một lần chạy. Batch schema của model cap ở 5.',
+    category: 'questions',
+    sortOrder: 1310,
+    schema: intField('Số câu tương tự mỗi câu gốc', 1, 5, 'câu')
+  },
+  maxSiblingsPerRun: {
+    label: 'Max câu tương tự / 1 lần chạy',
+    description: 'Trần tổng số câu tương tự sinh trong một lần chạy auto (tối ưu cost AI).',
+    category: 'questions',
+    sortOrder: 1320,
+    schema: intField('Max câu tương tự / 1 lần chạy', 1, undefined, 'câu')
   }
 };
 
@@ -570,6 +615,39 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
     sortOrder: 1230
   },
 
+  // ── Sinh câu tương tự (auto) ───────────────────────────────────────────────
+  ...numericRecords('sibling_gen', EnglishConfigDefaults.sibling_gen, SIBLING_GEN_FIELDS),
+  {
+    recordKey: 'job_flags.siblingGenEnabled',
+    namespace: 'job_flags',
+    path: 'siblingGenEnabled',
+    category: 'questions',
+    label: 'Bật Sinh câu tương tự (scheduled)',
+    description:
+      'Tắt sẽ bỏ qua các lần sinh câu tương tự tự động theo lịch bên dưới. Sinh thủ công (nút trên từng câu) ' +
+      'không phụ thuộc cờ này.',
+    recordType: 'boolean',
+    defaultValue: EnglishConfigDefaults.job_flags.siblingGenEnabled,
+    validation: boolField('Bật Sinh câu tương tự (scheduled)'),
+    uiSchema: boolField('Bật Sinh câu tương tự (scheduled)'),
+    sortOrder: 1330
+  },
+  {
+    recordKey: 'sibling_gen_schedule.items',
+    namespace: 'sibling_gen_schedule',
+    path: 'items',
+    category: 'questions',
+    label: 'Lịch chạy Sinh câu tương tự (cron)',
+    description:
+      'Danh sách các mốc giờ chạy scheduled sibling-gen. Đổi giá trị này sẽ reconcile lại BullMQ job ' +
+      'schedulers ngay lập tức, không cần restart.',
+    recordType: 'arr',
+    defaultValue: EnglishConfigDefaults.sibling_gen_schedule,
+    validation: cronScheduleField('Lịch chạy Sinh câu tương tự'),
+    uiSchema: cronScheduleField('Lịch chạy Sinh câu tương tự'),
+    sortOrder: 1340
+  },
+
   // ── Bài đọc ────────────────────────────────────────────────────────────────
   ...numericRecords('reading_passage', EnglishConfigDefaults.reading_passage, READING_PASSAGE_FIELDS),
   {
@@ -667,6 +745,8 @@ export function buildDefaultEnglishConfigSnapshot(): EnglishConfigSnapshot {
     quiz_distribution: QuizDistributionSchema.parse(EnglishConfigDefaults.quiz_distribution),
     job_flags: JobFlagsSchema.parse(EnglishConfigDefaults.job_flags),
     pool_refill_schedule: PoolRefillScheduleSchema.parse(EnglishConfigDefaults.pool_refill_schedule),
+    sibling_gen: SiblingGenSchema.parse(EnglishConfigDefaults.sibling_gen),
+    sibling_gen_schedule: SiblingGenScheduleSchema.parse(EnglishConfigDefaults.sibling_gen_schedule),
     reading_passage: ReadingPassageSchema.parse(EnglishConfigDefaults.reading_passage),
     reading_refill_schedule: ReadingRefillScheduleSchema.parse(EnglishConfigDefaults.reading_refill_schedule),
     reading_question: ReadingQuestionSchema.parse(EnglishConfigDefaults.reading_question),

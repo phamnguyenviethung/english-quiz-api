@@ -8,7 +8,8 @@ import {
   serial,
   text,
   timestamp,
-  uniqueIndex
+  uniqueIndex,
+  type AnyPgColumn
 } from 'drizzle-orm/pg-core';
 
 // Khớp với Quantization của OpenRouter SDK (closed enum) — giữ literal union để
@@ -70,6 +71,10 @@ export const englishQuestionPool = pgTable(
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
     topicId: integer().references(() => englishTopic.id),
+    // Provenance: khi row này được sinh ra như một "câu tương tự" (sibling) từ một câu
+    // pool khác, trỏ về câu gốc. NULL = câu sinh mới bình thường. Xem docs/sibling-question.md.
+    // Câu sibling vẫn là câu pool bình thường (pop/count/refill không đổi) — đây chỉ là thuộc tính.
+    sourceQuestionId: integer().references((): AnyPgColumn => englishQuestionPool.id, { onDelete: 'set null' }),
     createdAt: timestamp().defaultNow(),
     // Set khi admin approve một AI review ghi đè questionData (xem englishQuestionPoolReview).
     updatedAt: timestamp().defaultNow()
@@ -78,7 +83,8 @@ export const englishQuestionPool = pgTable(
     // Bucket (engLevel, quizType, topicId) là truy vấn nóng nhất: count/pop/refill và
     // filter ở admin UI đều đi qua tổ hợp này.
     index('idx_question_pool_bucket').on(table.engLevel, table.quizType, table.topicId),
-    index('idx_question_pool_created_at').on(table.createdAt)
+    index('idx_question_pool_created_at').on(table.createdAt),
+    index('idx_question_pool_source').on(table.sourceQuestionId)
   ]
 );
 

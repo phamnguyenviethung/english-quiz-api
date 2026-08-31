@@ -7,7 +7,6 @@ import logger from '@/configs/logger.config';
 import {
   englishQuestionPool,
   englishQuestionPoolReview,
-  englishTopic,
   POOL_REVIEW_VERDICTS,
   type EnglishQuestionPoolReview,
   type InsertEnglishQuestionPoolReview,
@@ -16,23 +15,11 @@ import {
 import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
 import { runWithConcurrency } from '@/utils/concurrency';
 import { buildReviewPrompt, type ReviewContext } from './prompt/review-prompt';
+import { QUESTION_SCHEMA_BY_TYPE } from './prompt/question-schema-map';
 import { buildAnswerKey, buildLearnerView } from './prompt/review-type-spec';
 import type { DifficultyContext } from './prompt/vocab-prompt';
 import questionPoolService from './questionPool.service';
 import type { QuizType } from './questionTypes';
-import {
-  ConversationQuestionSchema,
-  DescriptionQuestionSchema,
-  FillBlankQuestionSchema,
-  IdiomQuestionSchema,
-  OddOneOutQuestionSchema,
-  ParagraphQuestionSchema,
-  PhraseQuestionSchema,
-  SlangQuestionSchema,
-  SynonymQuestionSchema,
-  VerbUseMatchQuestionSchema,
-  VocabQuestionSchema
-} from './study.service';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -46,22 +33,6 @@ export const LIST_REVIEWS_MAX_PAGE_SIZE = 100;
 
 export type PoolReviewSort = 'id_desc' | 'id_asc' | 'created_desc' | 'created_asc';
 export const POOL_REVIEW_SORTS: PoolReviewSort[] = ['id_desc', 'id_asc', 'created_desc', 'created_asc'];
-
-// quizType → Zod schema của payload câu hỏi (dùng study.service để tránh lệch định nghĩa).
-// 'reading' và reading-* không nằm trong english_question_pool nên không có mặt ở đây.
-const QUESTION_SCHEMA_BY_TYPE: Partial<Record<QuizType, z.ZodTypeAny>> = {
-  vocab: VocabQuestionSchema,
-  fillblank: FillBlankQuestionSchema,
-  phrase: PhraseQuestionSchema,
-  conversation: ConversationQuestionSchema,
-  description: DescriptionQuestionSchema,
-  synonym: SynonymQuestionSchema,
-  slang: SlangQuestionSchema,
-  'odd-one-out': OddOneOutQuestionSchema,
-  paragraph: ParagraphQuestionSchema,
-  idiom: IdiomQuestionSchema,
-  'verb-use-match': VerbUseMatchQuestionSchema
-};
 
 // ─── Structured output schema ────────────────────────────────────────────────
 

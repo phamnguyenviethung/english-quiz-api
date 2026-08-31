@@ -6,7 +6,8 @@ export type ReviewContext = DifficultyContext & { topicName?: string | null };
 
 // Chỉ phần mô tả level (KHÔNG lấy "EXPERT LEARNER MODE — MAXIMUM DIFFICULTY" của
 // buildDifficultyInstruction — nó ép mọi câu phải khó tối đa, làm review sửa hỏng câu dễ).
-const LEVEL_NOTE: Record<DifficultyContext['engLevel'], string> = {
+// Export để sibling-prompt.ts dùng lại (cùng mục đích: mô tả level, không ép khó tối đa).
+export const LEVEL_NOTE: Record<DifficultyContext['engLevel'], string> = {
   A1: 'beginner — very common, everyday words (top ~1000 most frequent). Simple, direct items are expected.',
   A2: 'elementary — common words used in daily conversation and simple texts.',
   B1: 'intermediate — upper-intermediate vocabulary including academic/professional terms.',

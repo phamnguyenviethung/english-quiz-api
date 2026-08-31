@@ -195,6 +195,12 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       createdFrom: t.Optional(t.String({ format: 'date-time' })),
       createdTo: t.Optional(t.String({ format: 'date-time' })),
       q: t.Optional(t.String({ maxLength: 100 })),
+      sourceQuestionId: t.Optional(
+        t.Numeric({ minimum: 1, description: 'Chỉ lấy câu tương tự (sibling) sinh từ câu pool gốc này.' })
+      ),
+      onlySiblings: t.Optional(
+        t.BooleanString({ description: 'true = chỉ lấy câu là sibling (có sourceQuestionId).' })
+      ),
       sort: t.Optional(
         t.Union([
           t.Literal('id_asc'),

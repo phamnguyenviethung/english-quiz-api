@@ -33,6 +33,9 @@ import questionPoolService from '@/core/services/english/questionPool.service';
 import questionPoolReviewService, {
   type ListPoolReviewsInput
 } from '@/core/services/english/questionPoolReview.service';
+import siblingQuestionService from '@/core/services/english/siblingQuestion.service';
+import { SIBLING_SUPPORTED_QUIZ_TYPES, getQuizTypeLabel } from '@/core/services/english/questionTypes';
+import { SIBLING_LOCK_FIELDS_BY_TYPE } from '@/core/services/english/prompt/sibling-prompt';
 import { BusinessLogicException } from '@/core/exceptions';
 import studyService, { type DifficultyContext } from '@/core/services/english/study.service';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
@@ -352,6 +355,31 @@ async function deletePoolReview(id: number) {
   logger.info(`[Admin] Delete pool review id=${id}`);
   await questionPoolReviewService.deleteReview(id);
   return { id, deleted: true };
+}
+
+// ─── Pool sibling question ──────────────────────────────────────────────────────
+
+function generatePoolSiblings(
+  sourceId: number,
+  input: { count: number; model?: string; adminNote?: string },
+  userId: string
+) {
+  logger.info(`[Admin] Generate siblings pool id=${sourceId} count=${input.count} by=${userId}`);
+  return siblingQuestionService.generateSiblingsForSource(sourceId, {
+    count: input.count,
+    model: input.model,
+    adminNote: input.adminNote,
+    context: 'manual',
+    forceInsert: true
+  });
+}
+
+function listSiblingSupportedTypes() {
+  return SIBLING_SUPPORTED_QUIZ_TYPES.map((quizType) => ({
+    quizType,
+    label: getQuizTypeLabel(quizType),
+    lockFields: SIBLING_LOCK_FIELDS_BY_TYPE[quizType]
+  }));
 }
 
 // ─── Reading passages ───────────────────────────────────────────────────────────
@@ -757,6 +785,8 @@ export default {
   approvePoolReview,
   rejectPoolReview,
   deletePoolReview,
+  generatePoolSiblings,
+  listSiblingSupportedTypes,
   listReadings,
   getReading,
   updateReading,

@@ -387,3 +387,7 @@ Run tracking (run → bucket → model attempt) ghi vào DB (`english_cron_job_r
 ## AI Review
 
 Rà soát + sửa từng câu trong pool bằng LLM, lưu kết quả chờ admin approve để ghi đè `questionData`. Xem [`question-pool-review.md`](./question-pool-review.md). Bảng `english_question_pool_reviews`, endpoints `Admin / Pool Review` (`POST/GET /admin/pool/reviews`, `.../:id/approve|reject`). Approve là đường **duy nhất** cột `english_question_pool.updatedAt` được set.
+
+## Sibling Question
+
+Dựa vào một câu pool gốc, sinh ra các **biến thể** kiểm tra **đúng cùng term cần học** (từ/cụm/idiom/slang…), cùng độ khó, cùng topic, nhưng đổi mới ngữ cảnh / distractor / ví dụ / giải thích. Câu đạt validate được ghi **thẳng vào `english_question_pool`** (không có bước duyệt) — vẫn là câu pool bình thường, `pop` ra như mọi câu khác. Cột mới **`sourceQuestionId`** (nullable, FK tự trỏ về `english_question_pool.id`, `onDelete: set null`) đánh dấu provenance. Manual: `POST /admin/pool/siblings/:id` (đồng bộ). Auto: cron `english-sibling-gen` quét bucket thiếu, cờ `job_flags.siblingGenEnabled` + config `sibling_gen*`. Chỉ 9 loại có term trung tâm (không hỗ trợ `odd-one-out`, `paragraph`, reading-*). Xem [`sibling-question.md`](./sibling-question.md).

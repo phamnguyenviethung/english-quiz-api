@@ -11,6 +11,7 @@ import { englishRoute } from './routes/english.route';
 import { adminRoute } from './routes/admin.route';
 import { questionGenQueue } from '@/core/cron/question-gen.job';
 import { poolRefillQueue } from '@/core/cron/pool-refill.job';
+import { siblingGenQueue } from '@/core/cron/sibling-gen.job';
 import { readingRefillQueue } from '@/core/cron/reading-gen.job';
 import { readingQuestionRefillQueue } from '@/core/cron/reading-question-gen.job';
 import { z } from 'zod';
@@ -29,6 +30,7 @@ export async function startApi(): Promise<void> {
     queues: [
       new BullMQAdapter(questionGenQueue),
       new BullMQAdapter(poolRefillQueue),
+      new BullMQAdapter(siblingGenQueue),
       new BullMQAdapter(readingRefillQueue),
       new BullMQAdapter(readingQuestionRefillQueue)
     ],

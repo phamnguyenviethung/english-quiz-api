@@ -64,6 +64,13 @@
       "when": 1787879083127,
       "tag": "0008_cloudy_longshot",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788164112614,
+      "tag": "0009_fair_gideon",
+      "breakpoints": true
     }
   ]
 }

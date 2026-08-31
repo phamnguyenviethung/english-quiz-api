@@ -1,0 +1,3 @@
+ALTER TABLE "english_question_pool" ADD COLUMN "sourceQuestionId" integer;--> statement-breakpoint
+ALTER TABLE "english_question_pool" ADD CONSTRAINT "english_question_pool_sourceQuestionId_english_question_pool_id_fk" FOREIGN KEY ("sourceQuestionId") REFERENCES "public"."english_question_pool"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "idx_question_pool_source" ON "english_question_pool" USING btree ("sourceQuestionId");

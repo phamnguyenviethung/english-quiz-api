@@ -15,6 +15,8 @@ export type EnglishCronJobKey =
   | 'question_gen'
   | 'pool_refill'
   | 'manual_fill'
+  | 'sibling_gen'
+  | 'sibling_gen_manual'
   | 'reading_refill'
   | 'reading_manual_fill'
   | 'reading_question_refill'

@@ -1,4 +1,19 @@
-import { and, asc, count, desc, eq, gte, ilike, isNull, lte, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  isNotNull,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+  type SQL
+} from 'drizzle-orm';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { englishQuestionPool, englishTopic, type InsertEnglishQuestionPool } from '@/core/db/schema/main';
@@ -16,6 +31,7 @@ export interface PoolQuestion {
   tokenOut: number;
   optionCount: number;
   topicId: number | null;
+  sourceQuestionId: number | null;
 }
 
 export interface PoolQuestionListItem extends PoolQuestion {
@@ -45,6 +61,10 @@ export interface ListPoolQuestionsInput {
   createdFrom?: string;
   createdTo?: string;
   q?: string;
+  // Chỉ lấy câu sinh ra từ một câu gốc cụ thể (sibling của #id).
+  sourceQuestionId?: number;
+  // Chỉ lấy câu là sibling (sourceQuestionId IS NOT NULL).
+  onlySiblings?: boolean;
   sort?: PoolQuestionsSort;
   page?: number;
   pageSize?: number;
@@ -75,6 +95,8 @@ export interface PushQuestionInput {
   tokenIn: number;
   tokenOut: number;
   topicId?: number | null;
+  // Trỏ về câu pool gốc khi đây là một câu tương tự (sibling). Xem sibling-question.md.
+  sourceQuestionId?: number | null;
 }
 
 export function getMaxPoolSize(): number {
@@ -163,7 +185,8 @@ function mapRowToPoolQuestion(row: typeof englishQuestionPool.$inferSelect): Poo
     tokenIn: row.tokenIn,
     tokenOut: row.tokenOut,
     optionCount: row.optionCount,
-    topicId: row.topicId
+    topicId: row.topicId,
+    sourceQuestionId: row.sourceQuestionId
   };
 }
 
@@ -218,6 +241,7 @@ async function getPoolQuestionById(id: number): Promise<PoolQuestionListItem | n
       tokenIn: englishQuestionPool.tokenIn,
       tokenOut: englishQuestionPool.tokenOut,
       topicId: englishQuestionPool.topicId,
+      sourceQuestionId: englishQuestionPool.sourceQuestionId,
       topicDisplayName: englishTopic.displayName,
       topicRawName: englishTopic.name,
       createdAt: englishQuestionPool.createdAt
@@ -239,6 +263,7 @@ async function getPoolQuestionById(id: number): Promise<PoolQuestionListItem | n
     tokenOut: row.tokenOut,
     optionCount: row.optionCount,
     topicId: row.topicId,
+    sourceQuestionId: row.sourceQuestionId,
     topicName: row.topicDisplayName ?? row.topicRawName ?? null,
     createdAt: row.createdAt
   };
@@ -276,6 +301,13 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
   if (input.withoutTopic) conditions.push(buildTopicCondition(null));
   else if (input.topicId !== undefined) conditions.push(buildTopicCondition(input.topicId));
 
+  // sourceQuestionId thắng onlySiblings (trỏ đúng một câu gốc thì hiển nhiên là sibling).
+  if (input.sourceQuestionId !== undefined) {
+    conditions.push(eq(englishQuestionPool.sourceQuestionId, input.sourceQuestionId));
+  } else if (input.onlySiblings) {
+    conditions.push(isNotNull(englishQuestionPool.sourceQuestionId));
+  }
+
   // createdAt nullable — row cũ chưa có createdAt sẽ bị loại khi lọc theo khoảng ngày.
   if (input.createdFrom) conditions.push(gte(englishQuestionPool.createdAt, new Date(input.createdFrom)));
   if (input.createdTo) conditions.push(lte(englishQuestionPool.createdAt, new Date(input.createdTo)));
@@ -304,6 +336,7 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
         tokenIn: englishQuestionPool.tokenIn,
         tokenOut: englishQuestionPool.tokenOut,
         topicId: englishQuestionPool.topicId,
+        sourceQuestionId: englishQuestionPool.sourceQuestionId,
         topicDisplayName: englishTopic.displayName,
         topicRawName: englishTopic.name,
         createdAt: englishQuestionPool.createdAt
@@ -328,11 +361,40 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
     tokenOut: row.tokenOut,
     optionCount: row.optionCount,
     topicId: row.topicId,
+    sourceQuestionId: row.sourceQuestionId,
     topicName: row.topicDisplayName ?? row.topicRawName ?? null,
     createdAt: row.createdAt
   }));
 
   return { items, page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+/**
+ * Chọn ngẫu nhiên tối đa `limit` câu gốc (KHÔNG phải sibling) trong bucket để job auto
+ * dùng làm nguồn sinh câu tương tự. Chỉ lấy câu `sourceQuestionId IS NULL` để không sinh
+ * sibling từ sibling (giữ chất lượng gần câu gốc thật).
+ */
+async function pickSiblingSourceIds(
+  engLevel: string,
+  quizType: QuizType,
+  topicId: number | null,
+  limit: number
+): Promise<number[]> {
+  if (limit <= 0) return [];
+  const rows = await db
+    .select({ id: englishQuestionPool.id })
+    .from(englishQuestionPool)
+    .where(
+      and(
+        eq(englishQuestionPool.engLevel, engLevel),
+        eq(englishQuestionPool.quizType, quizType),
+        buildTopicCondition(topicId),
+        isNull(englishQuestionPool.sourceQuestionId)
+      )
+    )
+    .orderBy(sql`RANDOM()`)
+    .limit(limit);
+  return rows.map((row) => row.id);
 }
 
 async function pushQuestions(questions: PushQuestionInput[]): Promise<number> {
@@ -379,7 +441,8 @@ async function pushQuestions(questions: PushQuestionInput[]): Promise<number> {
         model: q.model,
         tokenIn: q.tokenIn,
         tokenOut: q.tokenOut,
-        topicId: q.topicId ?? null
+        topicId: q.topicId ?? null,
+        sourceQuestionId: q.sourceQuestionId ?? null
       };
 
       await tx.insert(englishQuestionPool).values(values);
@@ -416,6 +479,7 @@ export default {
   listQuestions,
   listPoolModels,
   pushQuestions,
+  pickSiblingSourceIds,
   clearPool,
   getMaxPoolSize,
   getRefillThreshold,

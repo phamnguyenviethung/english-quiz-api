@@ -199,7 +199,10 @@ export const PoolQuestionSchema = t.Object({
   tokenIn: t.Number(),
   tokenOut: t.Number(),
   optionCount: t.Number(),
-  topicId: t.Nullable(t.Number())
+  topicId: t.Nullable(t.Number()),
+  sourceQuestionId: t.Nullable(
+    t.Number({ description: 'ID câu pool gốc nếu đây là câu tương tự (sibling). null = câu sinh mới thường.' })
+  )
 });
 
 // Row của list endpoint — thêm engLevel/topicName/createdAt so với PoolQuestionSchema
@@ -332,6 +335,34 @@ export const PoolReviewApproveResultSchema = t.Object({
     createdAt: t.Nullable(DateTimeSchema),
     updatedAt: t.Nullable(DateTimeSchema)
   })
+});
+
+// ── Question pool sibling ────────────────────────────────────────────────────
+// Kết quả sinh "câu tương tự" từ một câu pool gốc. Câu đạt validate ghi thẳng vào pool
+// (không có bước duyệt). Xem docs/sibling-question.md.
+export const SiblingGenResultSchema = t.Object({
+  sourceQuestionId: t.Number(),
+  quizType: t.String(),
+  engLevel: t.String(),
+  topicId: t.Nullable(t.Number()),
+  requested: t.Number({ description: 'Số sibling yêu cầu (1..5).' }),
+  generated: t.Number({ description: 'Số candidate model trả về.' }),
+  inserted: t.Number({ description: 'Số câu thực sự ghi vào english_question_pool.' }),
+  failed: t.Number({
+    description: 'Candidate bị loại: sai schema / đổi term khóa / lệch độ dài mảng / trùng câu gốc.'
+  }),
+  skipped: t.Number({ description: 'Candidate hợp lệ nhưng bị bỏ do bucket đã đầy (chỉ khi chạy auto).' }),
+  tokenIn: t.Number(),
+  tokenOut: t.Number(),
+  model: t.String(),
+  poolQuestionIds: t.Array(t.Number(), { description: 'ID các câu sibling vừa thêm vào pool.' }),
+  warnings: t.Array(t.String())
+});
+
+export const SiblingSupportedTypeSchema = t.Object({
+  quizType: t.String(),
+  label: t.String(),
+  lockFields: t.Array(t.String(), { description: 'Các field JSON được giữ nguyên văn từ câu gốc.' })
 });
 
 // ── Reading passages ─────────────────────────────────────────────────────────

@@ -192,3 +192,9 @@ Chi tiết rule riêng từng field nằm trong từng file prompt.
 - Mỗi câu trong batch được stringify riêng và `push` vào `english_question_pool` với cùng `topicId` bucket.
 
 Như vậy guideline chung (mục 5–6) là hợp đồng chất lượng cho cả **realtime** (thường `count = 1`) và **pre-generate batch**.
+
+---
+
+## 9. Sibling question (câu tương tự)
+
+`prompt/sibling-prompt.ts` (`buildSiblingPrompt`) tái dùng **nguyên** hợp đồng chất lượng mục 5–6, thêm ràng buộc: **khóa nguyên văn** term cần học + độ khó (CEFR) + topic lấy từ một câu pool gốc thật; chỉ sinh mới ngữ cảnh / distractor / ví dụ / giải thích và bắt buộc khác rõ rệt so với câu gốc. Chỉ 9 quizType có term trung tâm được hỗ trợ. Chi tiết ở [`sibling-question.md`](./sibling-question.md).
