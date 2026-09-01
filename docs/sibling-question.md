@@ -50,10 +50,11 @@ Bật bằng `job_flags.siblingGenEnabled = true`. Scheduler upsert từ `siblin
 
 1. Worker (`concurrency: 1`) mỗi lần chạy: `scanBuckets({ scope: 'deficient', thresholdCheck: 'target', filter: { quizTypes: SIBLING_SUPPORTED_QUIZ_TYPES } })` → bucket `currentCount < question_pool.maxPerBucket`.
 2. Mở một `english_cron_job_runs` (`jobKey = 'sibling_gen'`).
-3. Với mỗi bucket (tới khi đạt `sibling_gen.maxSiblingsPerRun`):
+3. Với mỗi bucket (tới khi đạt `sibling_gen.maxSiblingsPerRun`) — `processSiblingBucket(candidate, { forceInsert: false, ... })`:
    - Redis lock `question-pool:lock:{engLevel}:{topicId}:{quizType}` (`NX`, TTL 300s) — bỏ qua nếu đang bị giữ.
-   - `questionPoolService.pickSiblingSourceIds(...)` — tối đa `sibling_gen.sourcesPerBucketPerRun` câu gốc random, **chỉ câu `sourceQuestionId IS NULL`** (không sinh sibling từ sibling).
-   - Mỗi câu gốc → `generateSiblingsForSource(id, { count: sibling_gen.siblingsPerSource, context: 'schedule', forceInsert: false })`. `forceInsert: false` ⇒ `insertSiblings` đếm bucket trong transaction và **dừng ở `maxPerBucket`**.
+   - **`effectiveBudget = min(budget còn của run, candidate.deficiency)`** — mỗi bucket chỉ đặt sinh **vừa đủ để chạm `maxPerBucket`** (đếm `currentCount` từng bucket), KHÔNG đốt token cho phần chắc chắn bị pool cap bỏ. `sourceLimit = min(sourcesPerBucketPerRun, ceil(effectiveBudget / siblingsPerSource))`.
+   - `pickSiblingSourceIds(...)` — câu gốc random, **chỉ câu `sourceQuestionId IS NULL`** (không sinh sibling từ sibling).
+   - Mỗi câu gốc → `generateSiblingsForSource(id, { count: min(siblingsPerSource, budgetLeft), context: 'schedule', forceInsert: false })`. `insertSiblings` vẫn đếm bucket trong transaction làm chốt chặn cuối ở `maxPerBucket`.
    - Ghi `english_cron_job_buckets` + `recordModelAttempt` + `computeCostUsd`. Lỗi một câu gốc → log + tiếp; lỗi bucket → bucket `status='failed'`, run vẫn chạy tiếp.
 4. `summarizeRun(run, { forceFinishRunningBuckets: true })`.
 
@@ -72,8 +73,8 @@ Bản admin-trigger của luồng auto — dùng cho tab "Câu tương tự" ở
 3. `startRun({ jobKey: 'sibling_gen_manual', trigger: 'manual' })` → `void executeManualSiblingPlanInProcess(...)`
    (`runWithConcurrency`, concurrency = `question_pool.manualFillConcurrency`, guard `activeManualRuns`), trả ngay
    `{ runId, totalBuckets }`.
-4. Mỗi bucket: Redis lock → `pickSiblingSourceIds(plannedSources)` → `processSiblingBucket(...)` với
-   `context: 'manual'`, `forceInsert: scope === 'all'` (deficient thì tôn trọng `maxPerBucket`), model random theo bucket.
+4. Mỗi bucket: Redis lock → `processSiblingBucket(candidate, { context: 'manual', forceInsert: scope === 'all', budgetLeft: plannedCount, ... })`,
+   model random theo bucket. `scope='deficient'` ⇒ `processSiblingBucket` cắt tiếp theo `candidate.deficiency` (không vượt `maxPerBucket`); `scope='all'` ⇒ ép sinh đủ `plannedCount`.
 5. `summarizeRun(run, { forceFinishRunningBuckets: true })`. Preview: `GET /admin/pool/siblings/buckets` chạy chung
    `buildManualSiblingPlan` nên số liệu không lệch.
 

@@ -29,12 +29,14 @@ export interface ProcessSiblingBucketOptions {
   /** true = ghi bất kể pool cap; false = tôn trọng maxPerBucket. */
   forceInsert: boolean;
   context: ModelContext;
-  /** Trần tổng sibling còn được phép ghi cho lượt xử lý bucket này. */
+  /** Trần tổng sibling còn được phép ghi cho lượt xử lý bucket này (vd budget của cả run). */
   budgetLeft: number;
 }
 
 /**
  * Xử lý MỘT bucket: lấy câu gốc → sinh sibling từng câu → ghi tracking bucket + model attempt.
+ * Khi `forceInsert = false`, số sibling đặt sinh được **cắt theo `candidate.deficiency`** — mỗi
+ * bucket chỉ sinh vừa đủ để chạm `maxPerBucket`, không đốt token cho phần chắc chắn bị pool cap bỏ.
  * Không throw ra ngoài (lỗi từng câu gốc chỉ log), không tự khoá Redis (caller lo).
  */
 export async function processSiblingBucket(
@@ -42,7 +44,16 @@ export async function processSiblingBucket(
   candidate: RefillBucketCandidate,
   opts: ProcessSiblingBucketOptions
 ): Promise<{ inserted: number; generated: number }> {
-  const requestedCount = opts.sourceLimit * opts.siblingsPerSource;
+  // Với deficient (forceInsert=false): trần thực = min(trần caller đưa, số câu bucket còn thiếu).
+  const effectiveBudget = opts.forceInsert
+    ? Math.max(0, opts.budgetLeft)
+    : Math.max(0, Math.min(opts.budgetLeft, candidate.deficiency));
+  if (effectiveBudget <= 0) return { inserted: 0, generated: 0 };
+
+  // Chỉ lấy đủ số câu gốc cần để phủ effectiveBudget — cần ít sibling thì khỏi bốc thừa nguồn.
+  const sourceLimit = Math.min(opts.sourceLimit, Math.max(1, Math.ceil(effectiveBudget / opts.siblingsPerSource)));
+  const requestedCount = effectiveBudget;
+
   const bucket = await englishCronJobTrackingService.startBucket(run, {
     engLevel: candidate.engLevel,
     quizType: candidate.quizType,
@@ -60,7 +71,7 @@ export async function processSiblingBucket(
       candidate.engLevel,
       candidate.quizType,
       candidate.topicId,
-      opts.sourceLimit
+      sourceLimit
     );
 
     let generated = 0;
@@ -68,7 +79,7 @@ export async function processSiblingBucket(
     let tokenIn = 0;
     let tokenOut = 0;
     let model = opts.model ?? '';
-    let budgetLeft = opts.budgetLeft;
+    let budgetLeft = effectiveBudget;
 
     for (const sourceId of sourceIds) {
       if (budgetLeft <= 0) break;
