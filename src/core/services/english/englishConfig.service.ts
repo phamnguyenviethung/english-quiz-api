@@ -73,7 +73,7 @@ function valueColumnsForType(recordType: EnglishConfigRecordTypeKey, value: unkn
   return { ...columns, [`${prefix}Json`]: value };
 }
 
-function validateBasicValue(
+export function validateBasicValue(
   recordType: EnglishConfigRecordTypeKey,
   value: unknown,
   schema: EnglishConfigFieldSchema
@@ -113,7 +113,7 @@ function validateBasicValue(
   return value;
 }
 
-function assignPath(target: Record<string, unknown>, path: string, value: unknown): void {
+export function assignPath(target: Record<string, unknown>, path: string, value: unknown): void {
   if (path === 'items') {
     Object.assign(target, { __rootArray: value });
     return;
@@ -160,7 +160,7 @@ function parseSnapshotNamespace(namespace: EnglishConfigKey, value: unknown): En
   return EnglishConfigSchemas[namespace].parse(value) as EnglishConfigSnapshot[EnglishConfigKey];
 }
 
-function buildSnapshotFromRows(
+export function buildSnapshotFromRows(
   rows: EnglishConfigRecordView[],
   strictNamespaces?: ReadonlySet<EnglishConfigKey>
 ): EnglishConfigSnapshot {

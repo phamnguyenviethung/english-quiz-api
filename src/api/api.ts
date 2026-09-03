@@ -19,29 +19,52 @@ import { t } from 'elysia';
 import { ApiOk, ApiErrorSchema } from './common/responseSchemas';
 import { sanitizeOpenApiSpec } from './common/openapiSanitizer';
 
-export async function startApi(): Promise<void> {
-  const { createBullBoard } = await import('@bull-board/api');
-  const { BullMQAdapter } = await import('@bull-board/api/bullMQAdapter');
-  const { ElysiaAdapter } = await import('@bull-board/elysia');
+export interface CreateAppOptions {
+  /**
+   * Mount Bull Board tại /queues. Mặc định true (đường chạy production).
+   *
+   * Phải tắt khi chưa gọi initCronJobs(): các queue là `export let` chỉ được gán bên trong
+   * initCronJobs(), truyền undefined vào BullMQAdapter sẽ nổ ngay lúc dựng app. Test dựng app
+   * mà không chạy worker nào nên luôn truyền false.
+   */
+  mountQueueBoard?: boolean;
+}
 
-  const serverAdapter = new ElysiaAdapter('/queues');
+/**
+ * Dựng Elysia app đầy đủ nhưng KHÔNG listen. Tách khỏi startApi() để test gọi thẳng
+ * `app.handle(new Request(...))` — không cần mở port, không tranh chấp port giữa các file test.
+ */
+export async function createApp(opts: CreateAppOptions = {}) {
+  const mountQueueBoard = opts.mountQueueBoard ?? true;
 
-  createBullBoard({
-    queues: [
-      new BullMQAdapter(questionGenQueue),
-      new BullMQAdapter(poolRefillQueue),
-      new BullMQAdapter(siblingGenQueue),
-      new BullMQAdapter(readingRefillQueue),
-      new BullMQAdapter(readingQuestionRefillQueue)
-    ],
-    serverAdapter
-  });
+  // Kiểu do @bull-board/elysia trả về, để TS tự suy luận thay vì ép về Elysia rỗng.
+  let queueBoardPlugin: Awaited<
+    ReturnType<InstanceType<typeof import('@bull-board/elysia').ElysiaAdapter>['registerPlugin']>
+  > | null = null;
+  if (mountQueueBoard) {
+    const { createBullBoard } = await import('@bull-board/api');
+    const { BullMQAdapter } = await import('@bull-board/api/bullMQAdapter');
+    const { ElysiaAdapter } = await import('@bull-board/elysia');
 
-  // registerPlugin() là async (resolve về Elysia instance). Elysia 1.4.x không nuốt
-  // Promise trong .use() nữa nên phải await trước khi mount.
-  const queueBoardPlugin = await serverAdapter.registerPlugin();
+    const serverAdapter = new ElysiaAdapter('/queues');
 
-  const app = new Elysia()
+    createBullBoard({
+      queues: [
+        new BullMQAdapter(questionGenQueue),
+        new BullMQAdapter(poolRefillQueue),
+        new BullMQAdapter(siblingGenQueue),
+        new BullMQAdapter(readingRefillQueue),
+        new BullMQAdapter(readingQuestionRefillQueue)
+      ],
+      serverAdapter
+    });
+
+    // registerPlugin() là async (resolve về Elysia instance). Elysia 1.4.x không nuốt
+    // Promise trong .use() nữa nên phải await trước khi mount.
+    queueBoardPlugin = await serverAdapter.registerPlugin();
+  }
+
+  const base = new Elysia()
     .use(errorHandler)
     .use(
       cors({
@@ -139,8 +162,13 @@ export async function startApi(): Promise<void> {
           }
         }
       })
-    )
-    .use(queueBoardPlugin)
+    );
+
+  // Giữ nguyên vị trí trong chuỗi đăng ký (sau openapi, trước các route) — thứ tự này
+  // load-bearing, xem các comment ở trên. Gọi rời thay vì nối chuỗi vì plugin có thể vắng mặt.
+  if (queueBoardPlugin) base.use(queueBoardPlugin);
+
+  const app = base
     .get('/health', () => ok({ status: 'ok' as const }), {
       detail: {
         tags: ['Health'],
@@ -158,6 +186,12 @@ export async function startApi(): Promise<void> {
     .get('/openapi-auth', async () => generateAuthOpenAPISchema(), { detail: { hide: true } })
     .use(adminRoute)
     .use(englishRoute);
+
+  return app;
+}
+
+export async function startApi(): Promise<void> {
+  const app = await createApp({ mountQueueBoard: true });
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3220;
   app.listen(port);

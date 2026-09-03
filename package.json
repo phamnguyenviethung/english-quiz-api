@@ -17,6 +17,11 @@
     "db:seed:ai-models": "bun --env-file=.env.local run src/core/db/seeds/ai-models.seed.ts",
     "db:seed:tenant": "bun --env-file=.env.local run src/core/db/seeds/tenant.seed.ts",
     "db:seed:admin": "bun --env-file=.env.local run src/core/db/seeds/admin-user.seed.ts",
+    "test": "bun test --env-file=.env.test",
+    "test:unit": "bun test --env-file=.env.test test/unit",
+    "test:integration": "bun test --env-file=.env.test test/integration",
+    "test:e2e": "bun test --env-file=.env.test test/e2e",
+    "test:db:migrate": "bun --env-file=.env.test run src/core/db/migrate.ts",
     "auth:generate": "bunx @better-auth/cli@latest generate --config src/configs/auth.config.ts --output src/core/db/schema/auth.ts",
     "docker:build": "docker build -t english-quiz-api .",
     "docker:run": "docker run --env-file .env english-quiz-api"

@@ -33,7 +33,7 @@ async function buildSeedRow(key: string, modelId: string): Promise<InsertAiModel
   };
 }
 
-async function seedAiModels(): Promise<void> {
+export async function seedAiModels(): Promise<void> {
   const entries = Object.entries(MODELS) as [string, string][];
   logger.info(`[Seed/AiModels] Seeding ${entries.length} models...`);
 
@@ -50,12 +50,16 @@ async function seedAiModels(): Promise<void> {
   );
 }
 
-seedAiModels()
-  .then(() => {
-    logger.info('[Seed/AiModels] Done.');
-    process.exit(0);
-  })
-  .catch((err) => {
-    logger.error('[Seed/AiModels] Failed:', err);
-    process.exit(1);
-  });
+// Chỉ tự chạy khi gọi trực tiếp bằng `bun run <file>`. Import từ nơi khác (vd fixture test)
+// thì chỉ lấy hàm, không exit process.
+if (import.meta.main) {
+  seedAiModels()
+    .then(() => {
+      logger.info('[Seed/AiModels] Done.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      logger.error('[Seed/AiModels] Failed:', err);
+      process.exit(1);
+    });
+}

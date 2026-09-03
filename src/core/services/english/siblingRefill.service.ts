@@ -174,7 +174,10 @@ export interface SiblingRefillPlan {
 
 const SIBLING_SUPPORTED_SET = new Set<string>(SIBLING_SUPPORTED_QUIZ_TYPES);
 
-function resolveKnobs(params: SiblingRefillScopeParams): { sourcesPerBucket: number; siblingsPerSource: number } {
+export function resolveKnobs(params: SiblingRefillScopeParams): {
+  sourcesPerBucket: number;
+  siblingsPerSource: number;
+} {
   const cfg = getEnglishConfigSnapshot().sibling_gen;
   const sourcesPerBucket = Math.max(1, Math.trunc(params.sourcesPerBucket ?? cfg.sourcesPerBucketPerRun));
   const siblingsPerSource = Math.min(

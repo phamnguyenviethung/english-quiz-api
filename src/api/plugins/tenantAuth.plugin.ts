@@ -12,7 +12,7 @@ import { getAdminUser } from '@/api/plugins/adminAuth.plugin';
  * id = 0 an toàn vì tenantId không xuống tới tầng data (data quiz là global,
  * xem comment ở src/core/db/schema/main.ts). Constant này không được mutate ở đâu.
  */
-const ADMIN_TENANT: TenantContext = {
+export const ADMIN_TENANT: TenantContext = {
   id: 0,
   name: '__admin__',
   allowAllTopics: true,
@@ -23,7 +23,7 @@ const ADMIN_TENANT: TenantContext = {
 };
 
 // Đọc raw Bearer token từ header Authorization.
-function extractBearer(authorization: string | undefined): string | null {
+export function extractBearer(authorization: string | undefined): string | null {
   if (!authorization) return null;
   const [scheme, token] = authorization.split(' ');
   if (scheme?.toLowerCase() !== 'bearer' || !token) return null;

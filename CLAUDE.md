@@ -28,3 +28,11 @@
 ## Docs
 
 - Folder: `/docs/**` — tham khảo `question-pool.md`, `question-pool-review.md`, `sibling-question.md`, `reading-passage.md`, `reading-question.md`, `english-config.md`, `generate-question-common-rule.md`, `ai-model-provider.md`, `admin-auth.md`, `tenant-auth.md`. Update docs khi sửa feature tương ứng.
+
+## Testing
+
+- Chi tiết: `docs/testing.md`. Chạy: `bun run test` (hoặc `test:unit` / `test:integration` / `test:e2e`).
+- Test dùng **DB riêng** `english_quiz_test` (`.env.test`), KHÔNG đụng DB dev. `test/setup.ts` từ chối chạy nếu `DATABASE_URL` không chứa chữ `test`.
+- LLM luôn mock ở `generateStructuredOutput` — không bao giờ gọi OpenRouter thật. Redis mock in-memory, không chạy worker BullMQ.
+- Viết test phải ưu tiên test tất cả các bussiness và user journey; đặt tên test theo khẳng định nghiệp vụ, không theo implementation.
+- Phát hiện bug khi viết test: ghi vào `test/notes/FINDINGS.md` + test khoá hiện trạng, không tự sửa logic.

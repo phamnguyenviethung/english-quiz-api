@@ -128,7 +128,7 @@ function buildTopicCondition(topicId: number | null) {
 
 // drizzle ilike() không tự escape — % và _ gõ bởi người dùng phải escape thủ công,
 // nếu không chúng sẽ hoạt động như wildcard SQL (vd: q="%" sẽ khớp toàn bộ bảng).
-function escapeLikePattern(value: string): string {
+export function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 

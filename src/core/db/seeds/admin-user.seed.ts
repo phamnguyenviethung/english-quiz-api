@@ -20,7 +20,7 @@ import logger from '@/configs/logger.config';
 import { auth, Role } from '@/configs/auth.config';
 import { users } from '@/core/db/schema/auth';
 
-async function seedAdminUser(): Promise<void> {
+export async function seedAdminUser(): Promise<void> {
   const email = process.env.SEED_ADMIN_EMAIL;
   const password = process.env.SEED_ADMIN_PASSWORD;
   const name = process.env.SEED_ADMIN_NAME ?? 'Admin';
@@ -55,12 +55,16 @@ async function seedAdminUser(): Promise<void> {
   logger.info('[Seed/Admin] ─────────────────────────────────────────────');
 }
 
-seedAdminUser()
-  .then(() => {
-    logger.info('[Seed/Admin] Done.');
-    process.exit(0);
-  })
-  .catch((err) => {
-    logger.error('[Seed/Admin] Failed:', err);
-    process.exit(1);
-  });
+// Chỉ tự chạy khi gọi trực tiếp bằng `bun run <file>`. Import từ nơi khác (vd fixture test)
+// thì chỉ lấy hàm, không exit process.
+if (import.meta.main) {
+  seedAdminUser()
+    .then(() => {
+      logger.info('[Seed/Admin] Done.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      logger.error('[Seed/Admin] Failed:', err);
+      process.exit(1);
+    });
+}

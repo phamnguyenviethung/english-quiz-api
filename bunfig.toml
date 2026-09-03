@@ -1,0 +1,4 @@
+[test]
+# Chạy trước mọi import của test: nạp env test + mock logger/redis/mail/LLM.
+# Thứ tự này bắt buộc — logger.config.ts và redis.config.ts tạo kết nối ngay lúc import.
+preload = ["./test/setup.ts"]

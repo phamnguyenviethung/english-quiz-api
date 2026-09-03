@@ -9,8 +9,9 @@ import {
   type EnglishCronJobModelAttempt,
   type EnglishCronJobRun
 } from '@/core/db/schema/main';
+import { deriveRunStatus, type EnglishCronJobStatus } from './cronRunStatus';
 
-export type EnglishCronJobStatus = 'running' | 'success' | 'partial_success' | 'failed' | 'skipped';
+export type { EnglishCronJobStatus } from './cronRunStatus';
 export type EnglishCronJobKey =
   | 'question_gen'
   | 'pool_refill'
@@ -456,12 +457,14 @@ async function summarizeRun(
     const pricedBuckets = buckets.filter((b) => b.costUsd !== null);
     const costUsd = pricedBuckets.length === 0 ? null : pricedBuckets.reduce((sum, b) => sum + b.costUsd!, 0);
 
-    let status: EnglishCronJobStatus = 'success';
-    if (runningBuckets > 0) status = 'running';
-    else if (failedBuckets > 0 && succeededBuckets + skippedBuckets > 0) status = 'partial_success';
-    else if (failedBuckets > 0) status = 'failed';
-    else if (succeededBuckets === 0 && skippedBuckets > 0) status = 'skipped';
-    else if (totalBuckets === 0) status = existing.deficientBuckets === 0 ? 'skipped' : 'success';
+    const status = deriveRunStatus({
+      runningBuckets,
+      failedBuckets,
+      succeededBuckets,
+      skippedBuckets,
+      totalBuckets,
+      deficientBuckets: existing.deficientBuckets
+    });
 
     const finishedAt = status === 'running' ? null : new Date();
     await db

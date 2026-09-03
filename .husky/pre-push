@@ -1,1 +1,5 @@
 npm run build
+
+# Unit test chạy nhanh (~0.4s) và không cần DB/Redis — đủ rẻ để chặn ở pre-push.
+# Integration/e2e cần DB test nên chạy tay: bun run test
+npm run test:unit

@@ -15,7 +15,7 @@ import { QUIZ_TYPES } from '@/core/services/english/questionTypes';
 
 const DEMO_NAME = 'demo';
 
-async function seedTenant(): Promise<void> {
+export async function seedTenant(): Promise<void> {
   const [existing] = await db.select().from(tenant).where(eq(tenant.name, DEMO_NAME)).limit(1);
 
   const demo =
@@ -45,12 +45,16 @@ async function seedTenant(): Promise<void> {
   logger.info('[Seed/Tenant] ─────────────────────────────────────────────');
 }
 
-seedTenant()
-  .then(() => {
-    logger.info('[Seed/Tenant] Done.');
-    process.exit(0);
-  })
-  .catch((err) => {
-    logger.error('[Seed/Tenant] Failed:', err);
-    process.exit(1);
-  });
+// Chỉ tự chạy khi gọi trực tiếp bằng `bun run <file>`. Import từ nơi khác (vd fixture test)
+// thì chỉ lấy hàm, không exit process.
+if (import.meta.main) {
+  seedTenant()
+    .then(() => {
+      logger.info('[Seed/Tenant] Done.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      logger.error('[Seed/Tenant] Failed:', err);
+      process.exit(1);
+    });
+}

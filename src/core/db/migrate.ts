@@ -5,7 +5,7 @@ import logger from '@/configs/logger.config';
 /**
  * Run database migrations
  */
-async function runMigrations() {
+export async function runMigrations() {
   try {
     logger.info('Running database migrations...');
 
@@ -20,11 +20,14 @@ async function runMigrations() {
   }
 }
 
-// Run migrations
-runMigrations()
-  .then(() => {
-    process.exit(0);
-  })
-  .catch(() => {
-    process.exit(1);
-  });
+// Chỉ tự chạy khi được gọi trực tiếp (bun run src/core/db/migrate.ts). Import từ nơi khác
+// (vd harness test dựng schema cho DB test) thì chỉ lấy hàm, không exit process.
+if (import.meta.main) {
+  runMigrations()
+    .then(() => {
+      process.exit(0);
+    })
+    .catch(() => {
+      process.exit(1);
+    });
+}
