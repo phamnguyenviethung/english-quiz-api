@@ -374,6 +374,30 @@ export interface OnDemandRefillInput {
   optionCount: 4 | 5;
 }
 
+/**
+ * Tối đa 1 job refill đang chờ cho mỗi bucket. Dùng deduplication id thay vì jobId cố định:
+ * job fail vẫn nằm trong failed set (removeOnFail) nên jobId cũ sẽ khiến BullMQ bỏ qua mọi
+ * lần add sau → bucket không bao giờ được refill on-demand nữa. Deduplication id được nhả
+ * ngay khi job completed hoặc failed.
+ */
+export function buildOnDemandRefillJob(
+  input: OnDemandRefillInput,
+  needed: number
+): { name: string; data: QuestionGenJobData; opts: { deduplication: { id: string } } } {
+  return {
+    name: 'refill',
+    data: {
+      engLevel: input.engLevel,
+      quizType: input.quizType,
+      optionCount: input.optionCount,
+      topicId: input.topicId,
+      topicName: input.topicName,
+      count: needed
+    },
+    opts: { deduplication: { id: `refill_${input.engLevel}_${input.topicId ?? 'null'}_${input.quizType}` } }
+  };
+}
+
 // Backstop nhẹ cho quiz serving (pop-miss) — chỉ refill 1 bucket cụ thể, ngưỡng
 // ratio (không phải target), qua BullMQ queue. KHÔNG đổi hành vi so với bản cũ
 // (questionPoolTrigger.service.ts's ensurePoolFilled).
@@ -393,19 +417,8 @@ export async function runOnDemandRefill(input: OnDemandRefillInput): Promise<{ e
       `[${LOG_TAG}] Pool low (${currentCount}/${threshold}) for engLevel=${input.engLevel} topicId=${input.topicId} quizType=${input.quizType}, adding refill job count=${needed}`
     );
 
-    const jobId = `refill_${input.engLevel}_${input.topicId ?? 'null'}_${input.quizType}`;
-    await getQuestionGenQueue().add(
-      jobId,
-      {
-        engLevel: input.engLevel,
-        quizType: input.quizType,
-        optionCount: input.optionCount,
-        topicId: input.topicId,
-        topicName: input.topicName,
-        count: needed
-      },
-      { jobId }
-    );
+    const job = buildOnDemandRefillJob(input, needed);
+    await getQuestionGenQueue().add(job.name, job.data, job.opts);
     return { enqueued: true };
   } catch (err) {
     logger.warn(

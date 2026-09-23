@@ -354,7 +354,9 @@ export const SiblingGenResultSchema = t.Object({
   skipped: t.Number({ description: 'Candidate hợp lệ nhưng bị bỏ do bucket đã đầy (chỉ khi chạy auto).' }),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
-  model: t.String(),
+  model: t.String({ description: 'Tên model OpenRouter trả về (đã cắt prefix provider).' }),
+  configuredModel: t.String({ description: 'Model id đã cấu hình (ai_models.modelId) — dùng để tính giá.' }),
+  costUsd: t.Nullable(t.Number({ description: 'Chi phí USD của lời gọi, null = model chưa có giá.' })),
   poolQuestionIds: t.Array(t.Number(), { description: 'ID các câu sibling vừa thêm vào pool.' }),
   warnings: t.Array(t.String())
 });

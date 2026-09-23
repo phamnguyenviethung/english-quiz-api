@@ -11,7 +11,12 @@ import {
   type ProviderPreferencesJson
 } from '@/core/db/schema/main';
 import { ConflictException, NotFoundException } from '@/core/exceptions';
-import { fromProviderPreferences, isEmptyProviderPreferences, toProviderPreferences } from './providerPref.mapper';
+import {
+  fromProviderPreferences,
+  isEmptyProviderPreferences,
+  normalizeProviderPreferencesJson,
+  toProviderPreferences
+} from './providerPref.mapper';
 import openrouterCatalogService from './openrouterCatalog.service';
 
 export type AiModelConflictField = 'key' | 'modelId';
@@ -84,6 +89,15 @@ export function computeCostUsd(
   const { pricePromptPerToken, priceCompletionPerToken } = model;
   if (pricePromptPerToken === null && priceCompletionPerToken === null) return null;
   return (pricePromptPerToken ?? 0) * tokenIn + (priceCompletionPerToken ?? 0) * tokenOut;
+}
+
+/**
+ * Cộng chi phí nhiều lời gọi. Giữ null khi KHÔNG lời gọi nào có giá — cộng thành 0 sẽ bị hiểu
+ * nhầm là "chạy miễn phí".
+ */
+export function sumCostUsd(costs: Array<number | null | undefined>): number | null {
+  const priced = costs.filter((cost): cost is number => typeof cost === 'number');
+  return priced.length === 0 ? null : priced.reduce((sum, cost) => sum + cost, 0);
 }
 
 const UNIQUE_CONSTRAINT_TO_FIELD: Record<string, AiModelConflictField> = {
@@ -166,6 +180,9 @@ function toConflictError(err: unknown): ConflictException | null {
 
 async function createModel(input: CreateModelInput): Promise<AiModel> {
   const { key, modelId, isActive } = input;
+  // Validate provider trước khi gọi catalog: input sai phải bị chặn ngay, không tốn request.
+  const scheduleProvider = normalizeProviderPreferencesJson(input.scheduleProvider);
+  const manualProvider = normalizeProviderPreferencesJson(input.manualProvider);
   // Nạp giá ngay lúc tạo để cost tracking có số liệu từ lần sinh câu hỏi đầu tiên.
   const pricing = await fetchPricingSnapshot(modelId);
   try {
@@ -179,8 +196,8 @@ async function createModel(input: CreateModelInput): Promise<AiModel> {
           scheduleEnabled: input.scheduleEnabled ?? true,
           manualEnabled: input.manualEnabled ?? true,
           readingEnabled: input.readingEnabled ?? true,
-          scheduleProvider: input.scheduleProvider ?? null,
-          manualProvider: input.manualProvider ?? null,
+          scheduleProvider,
+          manualProvider,
           ...pricing
         })
         .returning()
@@ -211,7 +228,11 @@ type UpdateModelInput = Partial<
   >
 >;
 
-async function updateModel(id: number, data: UpdateModelInput): Promise<AiModel> {
+async function updateModel(id: number, input: UpdateModelInput): Promise<AiModel> {
+  // Provider jsonb đi qua cùng rule validate với context reading (undefined = không đổi).
+  const data: UpdateModelInput = { ...input };
+  if (input.scheduleProvider !== undefined) data.scheduleProvider = normalizeProviderPreferencesJson(input.scheduleProvider);
+  if (input.manualProvider !== undefined) data.manualProvider = normalizeProviderPreferencesJson(input.manualProvider);
   // Đổi modelId → giá cũ không còn đúng, nạp lại snapshot của model mới.
   const pricing = data.modelId ? await fetchPricingSnapshot(data.modelId) : null;
   try {

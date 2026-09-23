@@ -46,7 +46,9 @@ function isQuantization(value: string): value is ModelQuantization {
   return (MODEL_QUANTIZATIONS as readonly string[]).includes(value);
 }
 
-function collectValues(values: AiModelProviderPrefValue[], kind: ProviderPrefValueKind): string[] {
+type ProviderPrefValueRow = Pick<AiModelProviderPrefValue, 'id' | 'kind' | 'value' | 'position'>;
+
+function collectValues(values: ProviderPrefValueRow[], kind: ProviderPrefValueKind): string[] {
   return values
     .filter((row) => row.kind === kind)
     .sort((a, b) => a.position - b.position || a.id - b.id)
@@ -58,8 +60,8 @@ function collectValues(values: AiModelProviderPrefValue[], kind: ProviderPrefVal
  * khớp đúng chỗ caller đang truyền `?? undefined` vào ResolvedStudyModel.provider.
  */
 export function toProviderPreferences(
-  pref: AiModelProviderPref | null | undefined,
-  values: AiModelProviderPrefValue[] = []
+  pref: Pick<AiModelProviderPref, keyof ProviderPrefColumns> | null | undefined,
+  values: ProviderPrefValueRow[] = []
 ): ProviderPreferencesJson | undefined {
   if (!pref) return undefined;
 
@@ -82,8 +84,8 @@ export function toProviderPreferences(
   if (quantizations.length > 0) result.quantizations = quantizations;
 
   const maxPrice: NonNullable<ProviderPreferencesJson['maxPrice']> = {};
-  for (const [key, column] of Object.entries(MAX_PRICE_COLUMNS) as [MaxPriceKey, string][]) {
-    const raw = pref[column as keyof AiModelProviderPref];
+  for (const [key, column] of Object.entries(MAX_PRICE_COLUMNS) as [MaxPriceKey, keyof ProviderPrefColumns][]) {
+    const raw = pref[column];
     if (typeof raw === 'number') maxPrice[key] = String(raw);
   }
   if (Object.keys(maxPrice).length > 0) result.maxPrice = maxPrice;
@@ -162,4 +164,19 @@ export function fromProviderPreferences(input: ProviderPreferencesJson): {
 /** Không field nào có giá trị → không cần giữ row nào trong DB. */
 export function isEmptyProviderPreferences(columns: ProviderPrefColumns, values: ProviderPrefValueInput[]): boolean {
   return values.length === 0 && Object.values(columns).every((value) => value === null);
+}
+
+/**
+ * Validate + chuẩn hoá provider prefs lưu dạng jsonb (context schedule/manual) bằng đúng rule
+ * của context reading: đi qua fromProviderPreferences rồi dựng lại object. Giá trị sai → 400
+ * ngay lúc lưu thay vì để OpenRouter từ chối ở mọi lần sinh câu hỏi. Rỗng → null.
+ */
+export function normalizeProviderPreferencesJson(
+  input: ProviderPreferencesJson | null | undefined
+): ProviderPreferencesJson | null {
+  if (!input) return null;
+  const { columns, values } = fromProviderPreferences(input);
+  if (isEmptyProviderPreferences(columns, values)) return null;
+  const rows = values.map((value, index) => ({ ...value, id: index }));
+  return toProviderPreferences(columns, rows) ?? null;
 }

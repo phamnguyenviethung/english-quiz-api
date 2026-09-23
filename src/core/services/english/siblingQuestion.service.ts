@@ -10,6 +10,7 @@ import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { englishQuestionPool } from '@/core/db/schema/main';
 import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
+import aiModelService, { computeCostUsd } from '@/core/services/ai/aiModel.service';
 import { QUESTION_SCHEMA_BY_TYPE } from './prompt/question-schema-map';
 import { buildAnswerKey, buildLearnerView } from './prompt/review-type-spec';
 import { buildSiblingPrompt, SIBLING_LOCK_FIELDS_BY_TYPE, type SiblingContext } from './prompt/sibling-prompt';
@@ -51,7 +52,12 @@ export interface SiblingGenResult {
   skipped: number;
   tokenIn: number;
   tokenOut: number;
+  /** Tên model OpenRouter trả về (đã cắt prefix provider) — chỉ để hiển thị. */
   model: string;
+  /** Model id đã cấu hình (khớp ai_models.modelId) — dùng để tính giá và tracking. */
+  configuredModel: string;
+  /** Chi phí USD của lời gọi này, tính theo giá của configuredModel. null = chưa có giá. */
+  costUsd: number | null;
   poolQuestionIds: number[];
   warnings: string[];
 }
@@ -186,6 +192,8 @@ async function generateSiblingsForSource(sourceId: number, opts: GenerateSibling
     const tokenIn = usage?.inputTokens ?? 0;
     const tokenOut = usage?.outputTokens ?? 0;
     const model = usage?.model ?? resolved.model;
+    // Giá tra theo model đã cấu hình: usage.model đã bị cắt prefix/suffix nên không khớp ai_models.
+    const costUsd = computeCostUsd(await aiModelService.getModelByModelId(resolved.model), tokenIn, tokenOut);
 
     const warnings: string[] = [];
     let failed = 0;
@@ -238,6 +246,8 @@ async function generateSiblingsForSource(sourceId: number, opts: GenerateSibling
       tokenIn,
       tokenOut,
       model,
+      configuredModel: resolved.model,
+      costUsd,
       poolQuestionIds,
       warnings
     };

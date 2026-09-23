@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeCostUsd } from '@/core/services/ai/aiModel.service';
+import { computeCostUsd, sumCostUsd } from '@/core/services/ai/aiModel.service';
 
 /**
  * Phân biệt `null` (chưa biết giá) với `0` (model free) là một quyết định nghiệp vụ có chủ đích:
@@ -29,5 +29,20 @@ describe('computeCostUsd', () => {
       0.001,
       12
     );
+  });
+});
+
+describe('sumCostUsd', () => {
+  it('cộng các lời gọi có giá, bỏ qua lời gọi chưa có giá', () => {
+    expect(sumCostUsd([0.5, null, 0.25])).toBe(0.75);
+  });
+
+  it('không lời gọi nào có giá -> null, không phải 0', () => {
+    expect(sumCostUsd([null, undefined])).toBeNull();
+    expect(sumCostUsd([])).toBeNull();
+  });
+
+  it('lời gọi model free vẫn được tính là đã biết giá (0)', () => {
+    expect(sumCostUsd([0, null])).toBe(0);
   });
 });

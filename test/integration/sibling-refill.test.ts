@@ -9,6 +9,9 @@ import { setConfig } from '../helpers/config.helper';
 import { mockLLM } from '../helpers/llm.helper';
 import { createTopic, seedPoolQuestion, seedPoolQuestions } from '../helpers/seed.helper';
 import { vocabQuestion } from '../fixtures/pool-question.fixture';
+import db from '@/configs/orm.config';
+import { aiModel } from '@/core/db/schema/main';
+import tracking from '@/core/services/english/englishCronJobTracking.service';
 
 let topicId: number;
 
@@ -130,23 +133,21 @@ describe('buildManualSiblingPlan — công thức số lượng', () => {
   });
 
   /**
-   * [đặc tả hiện trạng] Lọc hết sạch quizType (toàn loại không hỗ trợ) cho ra mảng RỖNG, mà
-   * scanBuckets coi mảng rỗng là "không lọc chiều này" -> hoá ra quét TOÀN BỘ quizType đang bật,
-   * thay vì không quét gì.
-   *
-   * Hiện KHÔNG khai thác được qua API: admin.controller.toSiblingBucketFilter() ném 400 trước
-   * khi tới đây (test/e2e/j6-sibling.test.ts phủ nhánh đó). Khoá lại bằng test để nếu ai bỏ
-   * validate ở controller thì có chỗ đỏ. Xem test/notes/FINDINGS.md #2.
+   * Lọc toàn quizType không hỗ trợ phải cho plan rỗng, không được hiểu mảng rỗng thành "không
+   * lọc" (scanBuckets coi mảng rỗng là quét hết). Controller đã chặn trường hợp này bằng 400,
+   * đây là lớp phòng thủ thứ hai. Xem test/notes/FINDINGS.md #2 (đã sửa).
    */
-  it('[đặc tả hiện trạng] lọc hết quizType -> mảng rỗng bị hiểu thành "không lọc"', async () => {
+  it('lọc toàn quizType không hỗ trợ -> plan rỗng, không quét toàn bộ', async () => {
     await onlyQuizType('vocab');
+    await seedPoolQuestions(2, { engLevel: 'A1', quizType: 'vocab', topicId });
     const plan = await buildManualSiblingPlan({
       scope: 'all',
       filter: { quizTypes: ['odd-one-out', 'paragraph'] as never }
     });
 
-    expect(plan.matched).toHaveLength(4);
-    expect(plan.matched.every((item) => item.quizType === 'vocab')).toBe(true);
+    expect(plan.matched).toHaveLength(0);
+    expect(plan.planned).toHaveLength(0);
+    expect(plan.totalPlannedSiblings).toBe(0);
   });
 
   it('totalPlannedSiblings = tổng plannedCount', async () => {
@@ -288,5 +289,103 @@ describe('preview khớp bucketKey của scan', () => {
     const a1 = plan.matched.find((item) => item.engLevel === 'A1')!;
 
     expect(bucketKeyOf(a1)).toBe(`A1:${topicId}:vocab`);
+  });
+});
+
+/**
+ * Client thật (aiClient.config.ts) trả `usage.model` đã cắt prefix provider và không có suffix
+ * routing (vd 'gemini-2.5-flash-lite' cho 'google/gemini-2.5-flash-lite:nitro'). Cost phải tính
+ * theo model ĐÃ CẤU HÌNH — nếu tra theo usage.model thì không bao giờ khớp ai_models và cost
+ * luôn null.
+ */
+describe('processSiblingBucket — chi phí theo model đã cấu hình', () => {
+  const CHEAP = { modelId: 'google/test-cheap:nitro', prompt: 0.000001, completion: 0.000002 };
+  const PRICEY = { modelId: 'openai/test-pricey:floor', prompt: 0.00001, completion: 0.00003 };
+
+  async function registerModel(model: typeof CHEAP): Promise<void> {
+    await db.insert(aiModel).values({
+      key: model.modelId,
+      modelId: model.modelId,
+      isActive: true,
+      manualEnabled: true,
+      scheduleEnabled: false,
+      readingEnabled: false,
+      pricePromptPerToken: model.prompt,
+      priceCompletionPerToken: model.completion
+    });
+  }
+
+  async function startRun() {
+    const run = await tracking.startRun({ jobKey: 'sibling_gen_manual', trigger: 'manual', totalBuckets: 1, deficientBuckets: 1 });
+    if (!run) throw new Error('không tạo được run');
+    return run;
+  }
+
+  it('cost khác null và đúng giá model đã cấu hình, dù model trả về tên đã cắt prefix', async () => {
+    await registerModel(CHEAP);
+    await seedPoolQuestion({ engLevel: 'A1', quizType: 'vocab', topicId });
+    mockLLM.enqueue({ questions: [sibling(1)] }, { inputTokens: 1000, outputTokens: 500, model: 'test-cheap' });
+    const run = await startRun();
+
+    await processSiblingBucket(run, candidateFor('A1', 1, 5), {
+      sourceLimit: 1,
+      siblingsPerSource: 1,
+      model: CHEAP.modelId,
+      forceInsert: true,
+      context: 'manual',
+      budgetLeft: 1
+    });
+
+    const detail = await tracking.getRunDetail(run.runId);
+    const expected = CHEAP.prompt * 1000 + CHEAP.completion * 500;
+    expect(detail!.attempts[0]!.model).toBe(CHEAP.modelId);
+    expect(detail!.attempts[0]!.costUsd).toBeCloseTo(expected, 12);
+    expect(detail!.buckets[0]!.costUsd).toBeCloseTo(expected, 12);
+  });
+
+  it('nhiều nguồn dùng model khác giá -> cost = tổng giá từng lời gọi theo đúng model của nó', async () => {
+    await registerModel(CHEAP);
+    await registerModel(PRICEY);
+    await seedPoolQuestions(4, { engLevel: 'A1', quizType: 'vocab', topicId });
+    for (let i = 0; i < 4; i += 1) {
+      mockLLM.enqueue({ questions: [sibling(i + 10)] }, { inputTokens: 1000, outputTokens: 500, model: 'stripped-name' });
+    }
+    const run = await startRun();
+
+    await processSiblingBucket(run, candidateFor('A1', 4, 10), {
+      sourceLimit: 4,
+      siblingsPerSource: 1,
+      forceInsert: true,
+      context: 'manual',
+      budgetLeft: 4
+    });
+
+    const priceOf = (modelId: string) => [CHEAP, PRICEY].find((m) => m.modelId === modelId)!;
+    const expected = mockLLM.calls.reduce((sum, call) => {
+      const price = priceOf(call.model);
+      return sum + price.prompt * 1000 + price.completion * 500;
+    }, 0);
+    const detail = await tracking.getRunDetail(run.runId);
+    expect(mockLLM.callCount).toBe(4);
+    expect(detail!.buckets[0]!.costUsd).toBeCloseTo(expected, 12);
+  });
+
+  it('model không có giá -> cost vẫn null (không đổi thành 0)', async () => {
+    await db.insert(aiModel).values({ key: 'nopriced', modelId: 'acme/no-price', isActive: true, manualEnabled: true });
+    await seedPoolQuestion({ engLevel: 'A1', quizType: 'vocab', topicId });
+    mockLLM.enqueue({ questions: [sibling(1)] }, { model: 'no-price' });
+    const run = await startRun();
+
+    await processSiblingBucket(run, candidateFor('A1', 1, 5), {
+      sourceLimit: 1,
+      siblingsPerSource: 1,
+      model: 'acme/no-price',
+      forceInsert: true,
+      context: 'manual',
+      budgetLeft: 1
+    });
+
+    const detail = await tracking.getRunDetail(run.runId);
+    expect(detail!.buckets[0]!.costUsd).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -221,13 +222,21 @@ function mapRowToPoolQuestion(row: typeof englishQuestionPool.$inferSelect): Poo
  * ai). Loại hết câu trong bucket → trả null, caller tự quyết định có pop lại không kèm
  * exclude hay không.
  */
+/**
+ * `allowedQuizTypes` = allow-list quizType của tenant (null = không giới hạn). Pop không nhận
+ * quizType cụ thể nên không assert 403 được — phải lọc kết quả, giống /topics.
+ */
 async function popQuestion(
   engLevel: string,
   topicId: number | null = null,
-  excludeIds: number[] = []
+  excludeIds: number[] = [],
+  allowedQuizTypes: readonly string[] | null = null
 ): Promise<PoolQuestion | null> {
+  if (allowedQuizTypes !== null && allowedQuizTypes.length === 0) return null;
+
   const conditions = [eq(englishQuestionPool.engLevel, engLevel), buildTopicCondition(topicId)];
   if (excludeIds.length > 0) conditions.push(notInArray(englishQuestionPool.id, excludeIds));
+  if (allowedQuizTypes !== null) conditions.push(inArray(englishQuestionPool.quizType, [...allowedQuizTypes]));
 
   const [row] = await db
     .select()

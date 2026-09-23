@@ -117,7 +117,8 @@ export function parseExcludeIds(raw: string | undefined): number[] {
 
 async function popFromPool(tenant: TenantContext, engLevel: EngLevel, topicId: number | null, excludeIds: number[]) {
   assertTopicAllowed(tenant, topicId);
-  const question = await questionPoolService.popQuestion(engLevel, topicId, excludeIds);
+  const allowedQuizTypes = tenant.allowAllQuizTypes ? null : tenant.allowedQuizTypes;
+  const question = await questionPoolService.popQuestion(engLevel, topicId, excludeIds, allowedQuizTypes);
   if (!question) throw new NotFoundException('Pool trống cho bucket này');
   return question;
 }

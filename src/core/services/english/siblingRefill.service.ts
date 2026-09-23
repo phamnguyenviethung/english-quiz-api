@@ -3,7 +3,7 @@ import logger from '@/configs/logger.config';
 import redisClient from '@/configs/redis.config';
 import { runWithConcurrency } from '@/utils/concurrency';
 import type { ModelContext, ResolvedStudyModel } from '@/configs/aiClient.config';
-import aiModelService, { computeCostUsd } from '@/core/services/ai/aiModel.service';
+import { sumCostUsd } from '@/core/services/ai/aiModel.service';
 import englishCronJobTrackingService, {
   normalizeError,
   type EnglishCronRunRef
@@ -78,7 +78,9 @@ export async function processSiblingBucket(
     let inserted = 0;
     let tokenIn = 0;
     let tokenOut = 0;
-    let model = opts.model ?? '';
+    const costs: Array<number | null> = [];
+    // Model đã cấu hình (ai_models.modelId) của từng lời gọi — mỗi nguồn có thể random model khác.
+    const models = new Set<string>(opts.model ? [opts.model] : []);
     let budgetLeft = effectiveBudget;
 
     for (const sourceId of sourceIds) {
@@ -95,18 +97,20 @@ export async function processSiblingBucket(
         inserted += res.inserted;
         tokenIn += res.tokenIn;
         tokenOut += res.tokenOut;
-        model = res.model || model;
+        costs.push(res.costUsd);
+        models.add(res.configuredModel);
         budgetLeft -= res.inserted;
       } catch (err) {
         logger.warn(`[${LOG_TAG}] Source ${sourceId} failed: ${normalizeError(err).message}`);
       }
     }
 
-    const costUsd = model ? computeCostUsd(await aiModelService.getModelByModelId(model), tokenIn, tokenOut) : null;
+    // Mỗi lời gọi đã tự tính giá theo đúng model của nó; tổng giữ null nếu không lời gọi nào có giá.
+    const costUsd = sumCostUsd(costs);
     await englishCronJobTrackingService.recordModelAttempt({
       run,
       bucket,
-      model: model || '(none)',
+      model: models.size > 0 ? [...models].join(', ') : '(none)',
       attemptOrder: 1,
       status: 'success',
       requestedCount,
@@ -198,6 +202,9 @@ export async function buildManualSiblingPlan(params: SiblingRefillScopeParams): 
   const quizTypes = (params.filter?.quizTypes ?? SIBLING_SUPPORTED_QUIZ_TYPES).filter((q) =>
     SIBLING_SUPPORTED_SET.has(q)
   ) as QuizType[];
+  // Caller có lọc quizType nhưng không cái nào hỗ trợ sibling → plan rỗng. Không được để
+  // mảng rỗng đi xuống scanBuckets, vì ở đó mảng rỗng nghĩa là "không lọc" (quét hết).
+  if (quizTypes.length === 0) return { matched: [], planned: [], totalPlannedSiblings: 0 };
 
   const [candidates, sourceCounts] = await Promise.all([
     scanBuckets({

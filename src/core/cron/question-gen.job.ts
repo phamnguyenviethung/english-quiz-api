@@ -12,7 +12,6 @@ import { pickStudyModelForContext } from '@/configs/aiClient.config';
 import aiModelService, { computeCostUsd } from '@/core/services/ai/aiModel.service';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 import logger from '@/configs/logger.config';
-import redisClient from '@/configs/redis.config';
 import englishCronJobTrackingService, {
   normalizeError,
   type EnglishCronBucketRef,
@@ -39,10 +38,6 @@ export let questionGenWorker: Worker<QuestionGenJobData>;
 export function getQuestionGenQueue(): Queue<QuestionGenJobData> {
   if (!questionGenQueue) throw new Error('[QuestionGenJob] Queue not initialized yet');
   return questionGenQueue;
-}
-
-function buildLockKey(engLevel: string, topicId: number | null, quizType: QuizType): string {
-  return `question-pool:lock:${engLevel}:${topicId ?? 'null'}:${quizType}`;
 }
 
 export interface BatchGenResult {
@@ -341,55 +336,48 @@ export async function fillBucket(params: FillBucketParams): Promise<number> {
   return result.inserted;
 }
 
-async function processQuestionGenJob(data: QuestionGenJobData, trackingRun: EnglishCronRunRef | null): Promise<void> {
+export async function processQuestionGenJob(data: QuestionGenJobData, trackingRun: EnglishCronRunRef | null): Promise<void> {
   const { engLevel, optionCount, topicId, topicName } = data;
   const consumedType: QuizType = data.quizType ?? pickQuizType();
-  const lockKey = buildLockKey(engLevel, topicId, consumedType);
-  try {
-    const filled = await fillBucket({
-      engLevel,
-      quizType: consumedType,
-      optionCount,
-      topicId,
-      topicName,
-      count: data.count,
-      logTag: 'QuestionGenJob',
-      trackingRun,
-      trackingMetadata: {
-        source: 'question_gen',
-        bullTrackingRunId: data.trackingRunId
-      }
-    });
-    const currentCount = await questionPoolService.getPoolCount(engLevel, consumedType, topicId);
-    const maxPool = getMaxPoolSize();
-    if (currentCount < maxPool && filled > 0) {
-      const remaining = Math.min(maxPool - currentCount, 2);
-      const quizType2 = pickQuizType();
-      logger.info(`[QuestionGenJob] Filling remaining ${remaining} with quizType=${quizType2}`);
-      try {
-        await fillBucket({
-          engLevel,
-          quizType: quizType2,
-          optionCount,
-          topicId,
-          topicName,
-          count: remaining,
-          logTag: 'QuestionGenJob',
-          trackingRun,
-          trackingMetadata: {
-            source: 'question_gen_supplemental',
-            originalQuizType: consumedType
-          }
-        });
-      } catch (err) {
-        logger.warn(`[QuestionGenJob] Supplemental batch failed quizType=${quizType2}: ${err}`);
-      }
+  // Không đụng tới lock `question-pool:lock:*`: lock đó thuộc luồng sibling, job này không giữ
+  // nó. Chống vượt maxPerBucket đã có pushQuestions re-check trong transaction.
+  const filled = await fillBucket({
+    engLevel,
+    quizType: consumedType,
+    optionCount,
+    topicId,
+    topicName,
+    count: data.count,
+    logTag: 'QuestionGenJob',
+    trackingRun,
+    trackingMetadata: {
+      source: 'question_gen',
+      bullTrackingRunId: data.trackingRunId
     }
-  } finally {
+  });
+  const currentCount = await questionPoolService.getPoolCount(engLevel, consumedType, topicId);
+  const maxPool = getMaxPoolSize();
+  if (currentCount < maxPool && filled > 0) {
+    const remaining = Math.min(maxPool - currentCount, 2);
+    const quizType2 = pickQuizType();
+    logger.info(`[QuestionGenJob] Filling remaining ${remaining} with quizType=${quizType2}`);
     try {
-      await redisClient.del(lockKey);
+      await fillBucket({
+        engLevel,
+        quizType: quizType2,
+        optionCount,
+        topicId,
+        topicName,
+        count: remaining,
+        logTag: 'QuestionGenJob',
+        trackingRun,
+        trackingMetadata: {
+          source: 'question_gen_supplemental',
+          originalQuizType: consumedType
+        }
+      });
     } catch (err) {
-      logger.warn(`[QuestionGenJob] Failed to cleanup lock key=${lockKey}: ${err}`);
+      logger.warn(`[QuestionGenJob] Supplemental batch failed quizType=${quizType2}: ${err}`);
     }
   }
 }

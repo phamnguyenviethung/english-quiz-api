@@ -55,7 +55,7 @@ Bật bằng `job_flags.siblingGenEnabled = true`. Scheduler upsert từ `siblin
    - **`effectiveBudget = min(budget còn của run, candidate.deficiency)`** — mỗi bucket chỉ đặt sinh **vừa đủ để chạm `maxPerBucket`** (đếm `currentCount` từng bucket), KHÔNG đốt token cho phần chắc chắn bị pool cap bỏ. `sourceLimit = min(sourcesPerBucketPerRun, ceil(effectiveBudget / siblingsPerSource))`.
    - `pickSiblingSourceIds(...)` — câu gốc random, **chỉ câu `sourceQuestionId IS NULL`** (không sinh sibling từ sibling).
    - Mỗi câu gốc → `generateSiblingsForSource(id, { count: min(siblingsPerSource, budgetLeft), context: 'schedule', forceInsert: false })`. `insertSiblings` vẫn đếm bucket trong transaction làm chốt chặn cuối ở `maxPerBucket`.
-   - Ghi `english_cron_job_buckets` + `recordModelAttempt` + `computeCostUsd`. Lỗi một câu gốc → log + tiếp; lỗi bucket → bucket `status='failed'`, run vẫn chạy tiếp.
+   - Ghi `english_cron_job_buckets` + `recordModelAttempt`. Chi phí tính **theo từng câu gốc** trong `generateSiblingsForSource` bằng giá của **model đã cấu hình** (`configuredModel` = `ai_models.modelId`), không dùng `usage.model` (tên OpenRouter trả về đã bị cắt prefix, không khớp `ai_models`). Bucket cộng các lời gọi bằng `sumCostUsd` (null nếu không lời gọi nào có giá); attempt ghi danh sách model đã dùng. Lỗi một câu gốc → log + tiếp; lỗi bucket → bucket `status='failed'`, run vẫn chạy tiếp.
 4. `summarizeRun(run, { forceFinishRunningBuckets: true })`.
 
 ### Manual bulk (`POST /admin/pool/siblings/refill`)

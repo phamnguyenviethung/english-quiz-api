@@ -94,7 +94,7 @@ Tenant key chỉ đọc quiz. Có 2 tầng giới hạn:
 
 ## 6. Enforcement
 
-- **Mọi `/english/*` yêu cầu tenant key hợp lệ hoặc session admin** (`tenantAuthPlugin`). Thiếu/sai → **401**. Gọi route admin-only bằng tenant key → **403**. Topic/quizType ngoài allow-list → **403** ở các route nhận `topicId`/`quizType` cụ thể (`assertTopicAllowed`/`assertQuizTypeAllowed`); riêng `/topics` và `/topics/random-pairs` không có `topicId` đơn lẻ để assert nên **lọc kết quả** theo allow-list thay vì trả 403.
+- **Mọi `/english/*` yêu cầu tenant key hợp lệ hoặc session admin** (`tenantAuthPlugin`). Thiếu/sai → **401**. Gọi route admin-only bằng tenant key → **403**. Topic/quizType ngoài allow-list → **403** ở các route nhận `topicId`/`quizType` cụ thể (`assertTopicAllowed`/`assertQuizTypeAllowed`); riêng `/topics` và `/topics/random-pairs` không có `topicId` đơn lẻ để assert nên **lọc kết quả** theo allow-list thay vì trả 403. Tương tự, `/pool/pop` không nhận `quizType` nên **chỉ random trong các quizType tenant được cấp** (allow-list rỗng → 404).
 - Token có prefix `eqk_` đi thẳng nhánh tenant lookup; token khác được coi là session token của Better Auth. Session admin bỏ qua toàn bộ check admin-only/allow-list.
 - `/health` mở (không auth). `/queues` (bull-board) yêu cầu **cookie phiên admin** — check ở hook global trong `src/api/api.ts`.
 - `topicId = null` (bucket no-topic) luôn được phép truy cập.

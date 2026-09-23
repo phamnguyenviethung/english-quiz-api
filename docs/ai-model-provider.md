@@ -17,6 +17,8 @@ Mỗi model trong `ai_models` có thể cấu hình **provider routing** riêng 
 - `schedule` / `manual` lưu ở cột **jsonb** `scheduleProvider` / `manualProvider` trên `ai_models`
 - `reading` lưu **normalize** ở 2 bảng `ai_model_provider_prefs` + `ai_model_provider_pref_values`
 
+Cả 2 cách lưu dùng **chung rule validate** của `providerPref.mapper.ts`: reading đi qua `fromProviderPreferences`, còn jsonb schedule/manual đi qua `normalizeProviderPreferencesJson` (validate bằng `fromProviderPreferences` rồi dựng lại object chuẩn: list đã trim, bỏ phần tử rỗng, `maxPrice` dạng số chuẩn, object rỗng → `null`). Giá trị sai (trùng provider, quantization lạ, `maxPrice` âm / không phải số, `dataCollection` lạ) → **400** ngay lúc lưu thay vì để OpenRouter từ chối ở mọi lần sinh câu.
+
 **API không phản ánh khác biệt đó.** Cả 3 đều nhận/trả cùng một object lồng nhau trong body/response của `/admin/models`. Dashboard dùng chung component `ProviderPreferencesFields` cho cả 3 tab. Normalize thuần tuý là chuyện storage.
 
 Lý do chỉ reading normalize: `ProviderPreferences` có shape cố định nên lưu quan hệ thì query và ràng buộc được ở DB thay vì blob. Reading là feature mới nên làm đúng ngay từ đầu; 2 context cũ giữ jsonb để không phải migrate data đang chạy.

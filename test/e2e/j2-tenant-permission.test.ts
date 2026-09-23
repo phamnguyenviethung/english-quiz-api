@@ -139,6 +139,43 @@ describe('tầng 2 — allow-list quizType', () => {
       'FORBIDDEN'
     );
   });
+
+  // /pool/pop không nhận quizType cụ thể nên không assert 403 được — phải LỌC kết quả theo
+  // allow-list (giống /topics). Bucket allowedTopic có cả vocab lẫn idiom, tenant chỉ được vocab.
+  it('pop chỉ trả câu thuộc quizType được cấp', async () => {
+    const quizTypes = new Set<string>();
+    for (let i = 0; i < 20; i += 1) {
+      const data = await expectOk<{ quizType: string }>(
+        await api.get('/english/pool/pop', { token: restricted.apiKey, query: { engLevel: 'A1', topicId: allowedTopicId } })
+      );
+      quizTypes.add(data.quizType);
+    }
+
+    expect([...quizTypes]).toEqual(['vocab']);
+  });
+
+  it('tenant chưa được cấp quizType nào -> pop không trả câu nào (404)', async () => {
+    const noTypes = await createTestTenant({ topicIds: [allowedTopicId] });
+
+    expectError(
+      await api.get('/english/pool/pop', { token: noTypes.apiKey, query: { engLevel: 'A1', topicId: allowedTopicId } }),
+      404,
+      'NOT_FOUND'
+    );
+  });
+
+  it('allowAllQuizTypes -> pop ra được mọi quizType', async () => {
+    const allTypes = await createTestTenant({ topicIds: [allowedTopicId], allowAllQuizTypes: true });
+    const quizTypes = new Set<string>();
+    for (let i = 0; i < 30; i += 1) {
+      const data = await expectOk<{ quizType: string }>(
+        await api.get('/english/pool/pop', { token: allTypes.apiKey, query: { engLevel: 'A1', topicId: allowedTopicId } })
+      );
+      quizTypes.add(data.quizType);
+    }
+
+    expect([...quizTypes].sort()).toEqual(['idiom', 'vocab']);
+  });
 });
 
 describe('endpoint admin-only nằm dưới /english/*', () => {

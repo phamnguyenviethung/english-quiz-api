@@ -1,4 +1,4 @@
-# Phát hiện trong lúc viết test (chưa sửa)
+# Phát hiện trong lúc viết test
 
 Theo nguyên tắc của plan: test ghi nhận **hành vi thật hiện tại**, bug tìm thấy được liệt kê ở
 đây kèm test `.todo` tái hiện, không tự sửa logic trong đợt này.
@@ -45,9 +45,13 @@ Case đang chạy assert đúng hành vi hiện tại (404 + body rỗng) để 
 
 ---
 
-## 2. Lọc hết `quizTypes` trong sibling plan bị hiểu thành "không lọc"
+## 2. Lọc hết `quizTypes` trong sibling plan bị hiểu thành "không lọc" — ✅ ĐÃ SỬA
 
 **Mức độ:** thấp (hiện không khai thác được qua API, nhưng là bẫy tiềm ẩn).
+
+**Đã sửa:** `buildManualSiblingPlan` trả plan rỗng sớm khi filter quizType lọc ra mảng rỗng.
+Test: `test/integration/sibling-refill.test.ts` — `lọc toàn quizType không hỗ trợ -> plan rỗng, không quét toàn bộ`.
+Phần dưới giữ lại để tham khảo.
 
 `siblingRefill.buildManualSiblingPlan()`:
 
@@ -72,3 +76,56 @@ lọc ra rỗng".
 
 **Test khoá hiện trạng:** `test/integration/sibling-refill.test.ts` —
 `it('[đặc tả hiện trạng] lọc hết quizType -> mảng rỗng bị hiểu thành "không lọc"')`.
+
+---
+
+# Đã sửa (phát hiện khi port sang my-minigame-api)
+
+Mỗi mục có test tái hiện: fail với code cũ, pass sau khi sửa.
+
+## 3. Refill on-demand bị kẹt vĩnh viễn sau một job fail — ✅ ĐÃ SỬA
+
+**Mức độ:** trung bình. `runOnDemandRefill` add job với `jobId` cố định
+`refill_{lvl}_{topic}_{type}`, queue để `removeOnFail: 100` → job fail nằm lại trong failed set,
+BullMQ bỏ qua mọi `add` cùng id → bucket không bao giờ được refill on-demand nữa (hàm vẫn trả
+`enqueued: true`). Bucket `topicId = null` không được cron quét nên mất hẳn đường refill.
+
+**Sửa:** `buildOnDemandRefillJob` dùng `deduplication: { id }` (nhả khi completed hoặc failed).
+**Test:** `test/unit/on-demand-refill-job.test.ts`.
+
+## 4. Chi phí sibling refill luôn `null`, và tính giá nhầm model — ✅ ĐÃ SỬA
+
+**Mức độ:** trung bình. `processSiblingBucket` tra giá bằng `usage.model` — tên OpenRouter trả về
+đã bị `aiClient.config.ts` cắt prefix provider và không có suffix `:nitro`/`:floor` → không bao
+giờ khớp `ai_models.modelId` → `costUsd` luôn null. Ngoài ra token của cả bucket bị tính theo
+model của câu gốc **cuối cùng**, dù mỗi câu gốc có thể random model khác. Test cũ không bắt được
+vì `mockLLM` mặc định trả `usage.model = call.model` (id đầy đủ).
+
+**Sửa:** `generateSiblingsForSource` trả `configuredModel` + `costUsd` tính theo model đã cấu hình
+cho từng lời gọi; bucket cộng bằng `sumCostUsd` (null-aware).
+**Test:** `test/integration/sibling-refill.test.ts` — describe `processSiblingBucket — chi phí theo model đã cấu hình`.
+
+## 5. `GET /english/pool/pop` bỏ qua allow-list quizType của tenant — ✅ ĐÃ SỬA
+
+**Mức độ:** trung bình (phân quyền). Pop chỉ `assertTopicAllowed`; query random trên mọi quizType
+→ tenant bị giới hạn quizType vẫn nhận câu ngoài allow-list (trái `docs/tenant-auth.md`).
+
+**Sửa:** `popQuestion(..., allowedQuizTypes)` lọc `quizType IN (...)`; allow-list rỗng → null → 404.
+**Test:** `test/e2e/j2-tenant-permission.test.ts` — 3 case `pop ...` trong describe allow-list quizType.
+
+## 6. Job question-gen xoá Redis lock mà nó không giữ — ✅ ĐÃ SỬA
+
+**Mức độ:** thấp. `processQuestionGenJob` `DEL question-pool:lock:*` trong `finally`, nhưng lock
+chỉ do luồng sibling SET (NX) → có thể nhả lock của một lượt sibling đang chạy trên cùng bucket.
+
+**Sửa:** bỏ phần `DEL` (chống vượt sức chứa vẫn do `pushQuestions` re-check trong transaction).
+**Test:** `test/integration/question-gen-lock.test.ts`.
+
+## 7. Provider routing schedule/manual không được validate — ✅ ĐÃ SỬA
+
+**Mức độ:** thấp. `readingProvider` đi qua `fromProviderPreferences`, còn `scheduleProvider` /
+`manualProvider` (jsonb) lưu nguyên → `maxPrice` âm/không phải số, provider trùng… chỉ lộ ra khi
+OpenRouter từ chối ở mọi lần sinh câu.
+
+**Sửa:** `normalizeProviderPreferencesJson` (cùng rule với reading) trong `createModel`/`updateModel`.
+**Test:** `test/unit/provider-pref.test.ts`, `test/integration/ai-model-provider.test.ts`.

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   fromProviderPreferences,
   isEmptyProviderPreferences,
+  normalizeProviderPreferencesJson,
   toProviderPreferences,
   type ProviderPrefColumns,
   type ProviderPrefValueInput
@@ -173,5 +174,34 @@ describe('isEmptyProviderPreferences', () => {
   it('có value -> không rỗng', () => {
     const values: ProviderPrefValueInput[] = [{ kind: 'order', value: 'x', position: 0 }];
     expect(isEmptyProviderPreferences(emptyColumns, values)).toBe(false);
+  });
+});
+
+/**
+ * Context schedule/manual lưu provider dạng jsonb. Trước đây giá trị admin gửi được lưu nguyên,
+ * sai thì chỉ lộ ra khi OpenRouter từ chối ở mọi lần sinh câu. Giờ đi qua cùng rule với reading.
+ */
+describe('normalizeProviderPreferencesJson (jsonb schedule/manual)', () => {
+  it('chặn maxPrice âm hoặc không phải số', () => {
+    expect(() => normalizeProviderPreferencesJson({ maxPrice: { prompt: '-1' } })).toThrow(BusinessLogicException);
+    expect(() => normalizeProviderPreferencesJson({ maxPrice: { completion: 'abc' } })).toThrow(BusinessLogicException);
+  });
+
+  it('chặn provider trùng lặp và quantization lạ', () => {
+    expect(() => normalizeProviderPreferencesJson({ only: ['openai', ' openai'] })).toThrow(BusinessLogicException);
+    expect(() => normalizeProviderPreferencesJson({ quantizations: ['int3' as never] })).toThrow(BusinessLogicException);
+  });
+
+  it('trả về dạng chuẩn: list đã trim, bỏ phần tử rỗng, maxPrice dạng số chuẩn', () => {
+    expect(
+      normalizeProviderPreferencesJson({ order: [' google-vertex ', ''], sort: ' price ', maxPrice: { prompt: '1.50' } })
+    ).toEqual({ order: ['google-vertex'], sort: 'price', maxPrice: { prompt: '1.5' } });
+  });
+
+  it('không cấu hình gì -> null', () => {
+    expect(normalizeProviderPreferencesJson(null)).toBeNull();
+    expect(normalizeProviderPreferencesJson(undefined)).toBeNull();
+    expect(normalizeProviderPreferencesJson({})).toBeNull();
+    expect(normalizeProviderPreferencesJson({ order: [' '] })).toBeNull();
   });
 });

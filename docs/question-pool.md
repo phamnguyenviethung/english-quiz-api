@@ -45,13 +45,13 @@ Pool được phân theo **3 chiều**: **`(engLevel, topicId, quizType)`**.
 
 ## popQuestion — random thuần
 
-`popQuestion(engLevel, topicId, excludeIds)`:
+`popQuestion(engLevel, topicId, excludeIds, allowedQuizTypes)`:
 
-1. `SELECT * FROM english_question_pool WHERE engLevel = ? AND (topicId = ? | topicId IS NULL) [AND id NOT IN (...)] ORDER BY RANDOM() LIMIT 1`.
+1. `SELECT * FROM english_question_pool WHERE engLevel = ? AND (topicId = ? | topicId IS NULL) [AND id NOT IN (...)] [AND quizType IN (<allow-list của tenant>)] ORDER BY RANDOM() LIMIT 1`.
 2. Có row → trả về `PoolQuestion`. **Không** `UPDATE`, **không** `DELETE` — câu vẫn nằm trong pool và có thể được trả lại ở lần pop sau. Pool là **kho câu hỏi dùng lại được**.
 3. Không có row nào khớp → trả `null`.
 
-> Không lọc theo `quizType` khi pop — quizType của câu trả về là ngẫu nhiên trong bucket theo `(engLevel, topicId)`.
+> Client không chọn `quizType` khi pop — quizType của câu trả về là ngẫu nhiên trong bucket theo `(engLevel, topicId)`, **nhưng chỉ trong allow-list quizType của tenant** (`tenant_quiz_type_access`; `allowAllQuizTypes` / session admin = không giới hạn). Tenant chưa được cấp quizType nào → không có câu nào → 404. Vì pop không nhận quizType cụ thể nên allow-list được áp dụng bằng **lọc kết quả** (như `/topics`), không trả 403.
 
 ### `excludeIds` — chống lặp câu phía client
 
@@ -235,11 +235,11 @@ interface QuestionGenJobData {
 3. Gọi **`generateBatch`** cho đúng `quizType` với **một** model duy nhất. Không truyền `model` vào `fillBucketDetailed` → tự chọn qua `pickStudyModelForContext('schedule')` (xem "Chọn model" bên dưới). AI call fail → throw ngay, bucket ghi `status = failed`, **không retry model khác**.
 4. Mỗi phần tử trong kết quả → một `PushQuestionInput` (kèm `topicId`, token usage).
 5. Nếu sau batch vẫn thiếu chỗ: thử bù tối đa **2** câu với **`pickQuizType()`** ngẫu nhiên (cùng `topicName`).
-6. `pushQuestions(generated)`; đồng thời `DEL` Redis lock key trong `finally`.
+6. `pushQuestions(generated)` (re-check sức chứa bucket trong transaction). Job **không** đụng tới Redis lock `question-pool:lock:*` — lock đó thuộc luồng sibling.
 
 **Concurrency**: 2 job song song. **Retry**: không cấu hình `attempts` → 0 retry.
 
-**Dedup trigger**: `questionPoolTrigger` add job với `jobId = refill_{engLevel}_{topicId ?? 'null'}_{quizType}` — BullMQ loại trùng job cùng id trong queue.
+**Dedup trigger**: `runOnDemandRefill` add job (`buildOnDemandRefillJob`) với BullMQ `deduplication.id = refill_{engLevel}_{topicId ?? 'null'}_{quizType}` — mỗi bucket tối đa 1 job đang chờ/chạy. Dedup id được nhả khi job **completed hoặc failed**, nên job fail không chặn các lần refill sau. (Trước đây dùng `jobId` cố định: job fail nằm lại trong failed set (`removeOnFail: 100`) khiến mọi lần add sau của bucket đó bị BullMQ bỏ qua — bucket `topicId = null` không được cron quét nên mất hẳn đường refill.)
 
 ---
 
