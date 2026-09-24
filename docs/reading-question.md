@@ -2,7 +2,7 @@
 
 Câu hỏi đọc hiểu trắc nghiệm sinh bằng LLM **từ một bài đọc đã lưu** trong `english_reading_passages`.
 
-Nguồn quy tắc nội dung: [`question-generator-guideline.md`](./question-generator-guideline.md). Sửa guideline thì sửa `prompt/reading-question-prompt.ts` theo.
+Nguồn quy tắc nội dung: [`question-generator-guideline.md`](./question-generator-guideline.md). Sửa guideline thì sửa prompt theo: phần chung ở `prompt/reading-question/common.ts` + `index.ts`, phần riêng từng loại câu ở `prompt/reading-question/types/<type>.ts`.
 
 > **Ba pipeline reading khác nhau, đừng nhầm:**
 >

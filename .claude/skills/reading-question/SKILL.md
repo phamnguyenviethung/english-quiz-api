@@ -34,8 +34,5 @@ Full spec: `docs/reading-question.md`; content rules: `docs/question-generator-g
 3. Register it in `MODULES` in `prompt/reading-question/index.ts` — import fails fast if an allowed type has no module.
 4. Update `test/unit/reading-question-types.test.ts`, `docs/reading-question.md`, dashboard labels.
 
-## Gotchas
-- `docs/reading-question.md` still mentions `prompt/reading-question-prompt.ts`; the real code is the `prompt/reading-question/` folder.
-
 ## Tests
 - Unit `reading-question-types`; integration `reading`; e2e `j7-reading`. Helpers: `seedReadingQuestion`, `seedReadyPassage`, `readingQuestionResponder()`.

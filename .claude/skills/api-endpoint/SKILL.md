@@ -52,4 +52,4 @@ Add to `ApiErrorCode` in `src/api/common/errorCodes.ts`, then either a new `Http
 - Runtime config is read with `getEnglishConfigSnapshot()`, never from the config table directly (see `english-config` skill).
 - `.mount(auth.handler)` has no prefix, so unknown routes return an empty 404 (`test/notes/FINDINGS.md` #1).
 - Imports use the `@/*` alias.
-- Logger: `import logger from '@/configs/logger.config'`. Note CLAUDE.md says console-only, but the code also creates a Discord transport (warn+) and New Relic in production.
+- Logger: `import logger from '@/configs/logger.config'`. Transports: Console + Discord (`warn`+) + New Relic in production — `logger.warn`/`error` post to Discord, so don't use them for expected, high-volume events.

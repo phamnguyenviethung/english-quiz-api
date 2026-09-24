@@ -13,7 +13,7 @@
 - Mail: **Resend** (`src/configs/mail.config.ts`) — hiện chỉ dùng cho reset password
 - LLM: **OpenRouter** (`@openrouter/sdk`)
 - Validation: **Zod**
-- Logger: **Winston** (console-only, không có Discord transport)
+- Logger: **Winston** (`src/configs/logger.config.ts`): Console + Discord transport (level `warn`, `DISCORD_BOT_TOKEN`/`LOG_CHANNEL_ID`) + New Relic khi production
 - Docker
 
 ## Coding
