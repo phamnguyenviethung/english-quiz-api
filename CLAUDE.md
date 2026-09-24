@@ -13,7 +13,7 @@
 - Mail: **Resend** (`src/configs/mail.config.ts`) — hiện chỉ dùng cho reset password
 - LLM: **OpenRouter** (`@openrouter/sdk`)
 - Validation: **Zod**
-- Logger: **Winston** (console-only, không có Discord transport)
+- Logger: **Winston** (`src/configs/logger.config.ts`): Console + Discord transport (level `warn`, `DISCORD_BOT_TOKEN`/`LOG_CHANNEL_ID`) + New Relic khi production
 - Docker
 
 ## Coding
@@ -36,3 +36,12 @@
 - LLM luôn mock ở `generateStructuredOutput` — không bao giờ gọi OpenRouter thật. Redis mock in-memory, không chạy worker BullMQ.
 - Viết test phải ưu tiên test tất cả các bussiness và user journey; đặt tên test theo khẳng định nghiệp vụ, không theo implementation.
 - Phát hiện bug khi viết test: ghi vào `test/notes/FINDINGS.md` + test khoá hiện trạng, không tự sửa logic.
+
+## Agent Skills
+
+Project skills in `.claude/skills/` (load the matching skill before changing a feature):
+
+- Cross-cutting: `api-endpoint`, `bullmq-job`, `llm-generation`, `testing`, `api-contract-sync` (sync with english-quiz-dashboard)
+- Domain: `question-pool` (includes the "add quiz type" checklist), `pool-review`, `sibling-question`, `reading-passage`, `reading-question`, `beginner`, `english-config`, `cron-tracking`, `topics`, `ai-model-provider`, `tenant-auth`, `admin-auth`
+
+When you change a feature's files, wiring points or business rules, update the matching skill too (same as the docs rule).
