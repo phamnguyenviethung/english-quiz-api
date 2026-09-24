@@ -3,11 +3,12 @@ import { bullmqConnection } from './cron.config';
 import studyService, { type BatchGenerateOptions, type DifficultyContext } from '@/core/services/english/study.service';
 import questionPoolService, {
   type PushQuestionInput,
+  bucketKeyOf,
   getMaxPoolSize,
   getPerBucketGenerationCap,
   pickQuizType
 } from '@/core/services/english/questionPool.service';
-import type { QuizType } from '@/core/services/english/questionTypes';
+import { BEGINNER_MAX_OPTION_COUNT, isBeginnerLevel, type QuizType } from '@/core/services/english/questionTypes';
 import { pickStudyModelForContext } from '@/configs/aiClient.config';
 import aiModelService, { computeCostUsd } from '@/core/services/ai/aiModel.service';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
@@ -28,6 +29,8 @@ export interface QuestionGenJobData {
   optionCount: 4 | 5;
   topicId: number | null;
   topicName: string | null;
+  // Job cũ trong queue (trước khi có beginner) không có field này → coi như bucket thường.
+  forBeginner?: boolean;
   count: number;
   trackingRunId?: string;
 }
@@ -149,6 +152,7 @@ export interface FillBucketParams {
   optionCount: 4 | 5;
   topicId: number | null;
   topicName: string | null;
+  forBeginner?: boolean;
   count: number;
   logTag?: string;
   model?: string;
@@ -177,6 +181,7 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
     optionCount,
     topicId,
     topicName,
+    forBeginner = false,
     logTag = 'QuestionGen',
     model,
     provider,
@@ -192,40 +197,44 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
     topicId,
     topicName,
     requestedCount,
-    metadata: trackingMetadata
+    metadata: forBeginner ? { ...trackingMetadata, forBeginner } : trackingMetadata,
+    bucketKey: bucketKeyOf({ engLevel, topicId, quizType, forBeginner })
   });
+  const skipBucket = async (): Promise<FillBucketDetailedResult> => {
+    await englishCronJobTrackingService.finishBucket(bucket, {
+      status: 'skipped',
+      requestedCount,
+      generatedCount: 0,
+      insertedCount: 0,
+      skippedCount: requestedCount,
+      tokenIn: 0,
+      tokenOut: 0
+    });
+    return {
+      status: 'skipped',
+      requested: requestedCount,
+      generated: 0,
+      inserted: 0,
+      skipped: requestedCount,
+      tokenIn: 0,
+      tokenOut: 0,
+      costUsd: null
+    };
+  };
   let phase: EnglishCronJobErrorPhase = 'pool_count';
   let batchCount = requestedCount;
 
   try {
     if (!skipPoolCheck) {
       phase = 'pool_count';
-      const currentCount = await questionPoolService.getPoolCount(engLevel, quizType, topicId);
+      const currentCount = await questionPoolService.getPoolCount(engLevel, quizType, topicId, forBeginner);
       const maxPool = getMaxPoolSize();
       const needed = maxPool - currentCount;
       if (needed <= 0) {
         logger.info(
-          `[${logTag}] Bucket already full (${currentCount}/${maxPool}) engLevel=${engLevel} topicId=${topicId} quizType=${quizType}, skipping`
+          `[${logTag}] Bucket already full (${currentCount}/${maxPool}) engLevel=${engLevel} topicId=${topicId} quizType=${quizType} forBeginner=${forBeginner}, skipping`
         );
-        await englishCronJobTrackingService.finishBucket(bucket, {
-          status: 'skipped',
-          requestedCount,
-          generatedCount: 0,
-          insertedCount: 0,
-          skippedCount: requestedCount,
-          tokenIn: 0,
-          tokenOut: 0
-        });
-        return {
-          status: 'skipped',
-          requested: requestedCount,
-          generated: 0,
-          inserted: 0,
-          skipped: requestedCount,
-          tokenIn: 0,
-          tokenOut: 0,
-          costUsd: null
-        };
+        return await skipBucket();
       }
       batchCount = Math.min(Math.min(requestedCount, getPerBucketGenerationCap()), needed);
     }
@@ -236,26 +245,22 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
         logger.warn(
           `[${logTag}] Topic ${topicId} no longer exists/inactive, skipping bucket engLevel=${engLevel} quizType=${quizType}`
         );
-        await englishCronJobTrackingService.finishBucket(bucket, {
-          status: 'skipped',
-          requestedCount,
-          generatedCount: 0,
-          insertedCount: 0,
-          skippedCount: requestedCount,
-          tokenIn: 0,
-          tokenOut: 0
-        });
-        return {
-          status: 'skipped',
-          requested: requestedCount,
-          generated: 0,
-          inserted: 0,
-          skipped: requestedCount,
-          tokenIn: 0,
-          tokenOut: 0,
-          costUsd: null
-        };
+        return await skipBucket();
       }
+      // Admin có thể tắt cờ beginner của topic giữa lúc scan và lúc job chạy.
+      if (forBeginner && !topic.forBeginner) {
+        logger.warn(
+          `[${logTag}] Topic ${topicId} is no longer marked for beginner, skipping beginner bucket engLevel=${engLevel} quizType=${quizType}`
+        );
+        return await skipBucket();
+      }
+    }
+
+    if (forBeginner && (!isBeginnerLevel(engLevel) || optionCount > BEGINNER_MAX_OPTION_COUNT)) {
+      logger.warn(
+        `[${logTag}] Invalid beginner bucket engLevel=${engLevel} optionCount=${optionCount} quizType=${quizType}, skipping`
+      );
+      return await skipBucket();
     }
 
     // Không chỉ định model (đường on-demand backstop) → dùng đúng pool model của
@@ -266,11 +271,12 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
       optionCount,
       show5050: true,
       model: resolved.model,
-      provider: resolved.provider
+      provider: resolved.provider,
+      forBeginner
     };
     const batchOpts: BatchGenerateOptions = { count: batchCount, topic: topicName ?? undefined };
     logger.info(
-      `[${logTag}] Generating batch engLevel=${engLevel} topicId=${topicId} topicName=${topicName} quizType=${quizType} count=${batchCount}`
+      `[${logTag}] Generating batch engLevel=${engLevel} topicId=${topicId} topicName=${topicName} quizType=${quizType} forBeginner=${forBeginner} count=${batchCount}`
     );
     phase = 'generate_model';
     const result = await generateBatch(quizType, ctx, batchOpts, {
@@ -282,6 +288,7 @@ export async function fillBucketDetailed(params: FillBucketParams): Promise<Fill
       engLevel,
       optionCount,
       topicId,
+      forBeginner,
       ...item
     }));
     phase = 'push_questions';
@@ -336,9 +343,13 @@ export async function fillBucket(params: FillBucketParams): Promise<number> {
   return result.inserted;
 }
 
-export async function processQuestionGenJob(data: QuestionGenJobData, trackingRun: EnglishCronRunRef | null): Promise<void> {
+export async function processQuestionGenJob(
+  data: QuestionGenJobData,
+  trackingRun: EnglishCronRunRef | null
+): Promise<void> {
   const { engLevel, optionCount, topicId, topicName } = data;
-  const consumedType: QuizType = data.quizType ?? pickQuizType();
+  const forBeginner = data.forBeginner ?? false;
+  const consumedType: QuizType = data.quizType ?? pickQuizType({ forBeginner });
   // Không đụng tới lock `question-pool:lock:*`: lock đó thuộc luồng sibling, job này không giữ
   // nó. Chống vượt maxPerBucket đã có pushQuestions re-check trong transaction.
   const filled = await fillBucket({
@@ -347,6 +358,7 @@ export async function processQuestionGenJob(data: QuestionGenJobData, trackingRu
     optionCount,
     topicId,
     topicName,
+    forBeginner,
     count: data.count,
     logTag: 'QuestionGenJob',
     trackingRun,
@@ -355,11 +367,11 @@ export async function processQuestionGenJob(data: QuestionGenJobData, trackingRu
       bullTrackingRunId: data.trackingRunId
     }
   });
-  const currentCount = await questionPoolService.getPoolCount(engLevel, consumedType, topicId);
+  const currentCount = await questionPoolService.getPoolCount(engLevel, consumedType, topicId, forBeginner);
   const maxPool = getMaxPoolSize();
   if (currentCount < maxPool && filled > 0) {
     const remaining = Math.min(maxPool - currentCount, 2);
-    const quizType2 = pickQuizType();
+    const quizType2 = pickQuizType({ forBeginner });
     logger.info(`[QuestionGenJob] Filling remaining ${remaining} with quizType=${quizType2}`);
     try {
       await fillBucket({
@@ -368,6 +380,7 @@ export async function processQuestionGenJob(data: QuestionGenJobData, trackingRu
         optionCount,
         topicId,
         topicName,
+        forBeginner,
         count: remaining,
         logTag: 'QuestionGenJob',
         trackingRun,

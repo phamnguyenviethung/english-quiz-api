@@ -89,7 +89,10 @@ async function insertSiblings(rows: PushQuestionInput[], respectCap: boolean): P
           and(
             eq(englishQuestionPool.engLevel, first.engLevel),
             eq(englishQuestionPool.quizType, first.quizType),
-            first.topicId == null ? isNull(englishQuestionPool.topicId) : eq(englishQuestionPool.topicId, first.topicId)
+            first.topicId == null
+              ? isNull(englishQuestionPool.topicId)
+              : eq(englishQuestionPool.topicId, first.topicId),
+            eq(englishQuestionPool.forBeginner, first.forBeginner ?? false)
           )
         );
       bucketCount = r?.total ?? 0;
@@ -109,7 +112,8 @@ async function insertSiblings(rows: PushQuestionInput[], respectCap: boolean): P
           tokenIn: row.tokenIn,
           tokenOut: row.tokenOut,
           topicId: row.topicId ?? null,
-          sourceQuestionId: row.sourceQuestionId ?? null
+          sourceQuestionId: row.sourceQuestionId ?? null,
+          forBeginner: row.forBeginner ?? false
         })
         .returning({ id: englishQuestionPool.id });
       if (inserted) {
@@ -157,7 +161,8 @@ async function generateSiblingsForSource(sourceId: number, opts: GenerateSibling
       show5050: false,
       model: resolved.model,
       provider: resolved.provider,
-      topicName: item.topicName
+      topicName: item.topicName,
+      forBeginner: item.forBeginner
     };
 
     const lockedValues: Record<string, unknown> = {};
@@ -221,7 +226,9 @@ async function generateSiblingsForSource(sourceId: number, opts: GenerateSibling
       tokenIn: perTokenIn,
       tokenOut: perTokenOut,
       topicId: item.topicId,
-      sourceQuestionId: sourceId
+      sourceQuestionId: sourceId,
+      // Sibling ở cùng bucket với câu gốc — câu gốc beginner thì sibling cũng beginner.
+      forBeginner: item.forBeginner
     }));
 
     const poolQuestionIds = await insertSiblings(pushRows, !opts.forceInsert);

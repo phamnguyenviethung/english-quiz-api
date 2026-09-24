@@ -11,6 +11,7 @@ export type { StructuredOutputUsage };
 import logger from '@/configs/logger.config';
 import { buildConversationPrompt, type ConversationQuestion } from './prompt/conversation-prompt';
 import { buildDifficultyInstruction } from './prompt/difficulty-prompt';
+import { buildBeginnerInstruction } from './prompt/beginner-prompt';
 import { buildDescriptionPrompt, type DescriptionQuestion } from './prompt/description-prompt';
 import { buildFillBlankPrompt, type FillBlankQuestion } from './prompt/fill-blank-prompt';
 import { buildOddOneOutPrompt, type OddOneOutQuestion } from './prompt/odd-one-out-prompt';
@@ -53,7 +54,16 @@ import { buildSynonymPrompt, type SynonymQuestion } from './prompt/synonym-promp
 import { buildVocabPrompt, type DifficultyContext, type VocabQuestion } from './prompt/vocab-prompt';
 import { buildIdiomPrompt, type IdiomQuestion } from './prompt/idiom-prompt';
 import { buildVerbUseMatchPrompt, type VerbUseMatchQuestion } from './prompt/verb-use-match-prompt';
-import { ENG_LEVELS, type EngLevel, type QuizType, type ReadingPassageType } from './questionTypes';
+import {
+  BEGINNER_ENG_LEVELS,
+  BEGINNER_MAX_OPTION_COUNT,
+  BEGINNER_READING_PASSAGE_TYPE,
+  ENG_LEVELS,
+  isBeginnerLevel,
+  type EngLevel,
+  type QuizType,
+  type ReadingPassageType
+} from './questionTypes';
 import { BusinessLogicException } from '@/core/exceptions';
 import type { ProviderPreferencesJson } from '@/core/db/schema/main';
 
@@ -269,6 +279,7 @@ export interface ReadingPassageContext {
   cefrLevel: EngLevel;
   topicName: string;
   type: ReadingPassageType;
+  forBeginner?: boolean;
   model: string;
   provider?: ProviderPreferencesJson;
 }
@@ -285,6 +296,7 @@ export interface ReadingQuestionContext {
   paragraphs: string[];
   cefrLevel: EngLevel;
   topicName: string;
+  forBeginner?: boolean;
   model: string;
   provider?: ProviderPreferencesJson;
 }
@@ -314,6 +326,34 @@ interface BatchResult<T> {
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
+/** Bài đọc beginner chỉ có level ≤ B1 và type 'daily'. */
+export function assertBeginnerReadingScope(cefrLevel: string, type: string): void {
+  if (!isBeginnerLevel(cefrLevel)) {
+    throw new BusinessLogicException(
+      `Beginner reading supports cefrLevel ${BEGINNER_ENG_LEVELS.join(', ')} only (got ${cefrLevel})`
+    );
+  }
+  if (type !== BEGINNER_READING_PASSAGE_TYPE) {
+    throw new BusinessLogicException(
+      `Beginner reading supports type "${BEGINNER_READING_PASSAGE_TYPE}" only (got ${type})`
+    );
+  }
+}
+
+/**
+ * Khối hướng dẫn độ khó append cuối prompt: luồng thường dùng EXPERT LEARNER MODE,
+ * luồng beginner thay bằng BEGINNER MODE (≤ B1, từ vựng thường ngày, distractor dễ phân biệt).
+ */
+export function buildLevelInstruction(ctx: DifficultyContext, quizType: QuizType): string {
+  return ctx.forBeginner ? buildBeginnerInstruction(ctx, quizType) : buildDifficultyInstruction(ctx);
+}
+
+// Paragraph ở luồng thường chưa từng append level instruction — giữ nguyên hành vi đó,
+// chỉ luồng beginner mới cần khối BEGINNER MODE.
+function buildParagraphLevelInstruction(ctx: DifficultyContext): string {
+  return ctx.forBeginner ? buildBeginnerInstruction(ctx, 'paragraph') : '';
+}
+
 class StudyService {
   async generatePhraseQuestion(
     ctx: DifficultyContext,
@@ -321,7 +361,7 @@ class StudyService {
   ): Promise<{ question: PhraseQuestion; usage?: StructuredOutputUsage }> {
     const wrongAnswerCount = ctx.optionCount - 1;
     const systemInstruction =
-      buildPhrasePrompt(wrongAnswerCount, { excludePhrases: excludeWords }) + buildDifficultyInstruction(ctx);
+      buildPhrasePrompt(wrongAnswerCount, { excludePhrases: excludeWords }) + buildLevelInstruction(ctx, 'phrase');
 
     logger.info(`[StudyService] Generating phrase question (engLevel=${ctx.engLevel})`);
 
@@ -351,7 +391,7 @@ class StudyService {
 
     const wrongAnswerCount = ctx.optionCount - 1;
     const systemInstruction =
-      buildFillBlankPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+      buildFillBlankPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'fillblank');
 
     const { data: object, usage } = await generateStructuredOutput(FillBlankQuestionSchema, {
       model: ctx.model,
@@ -383,7 +423,7 @@ class StudyService {
     logger.info(`[StudyService] Generating conversation question (engLevel=${ctx.engLevel})`);
 
     const wrongAnswerCount = ctx.optionCount - 1;
-    const systemInstruction = buildConversationPrompt(wrongAnswerCount) + buildDifficultyInstruction(ctx);
+    const systemInstruction = buildConversationPrompt(wrongAnswerCount) + buildLevelInstruction(ctx, 'conversation');
 
     // Pass excludeWords hint in input if provided
     const input =
@@ -429,7 +469,7 @@ class StudyService {
         topic: ctx.topicName ?? undefined,
         excludeWords,
         engLevel: ctx.engLevel
-      }) + buildDifficultyInstruction(ctx);
+      }) + buildLevelInstruction(ctx, 'description');
 
     const { data: object, usage } = await generateStructuredOutput(DescriptionQuestionSchema, {
       model: ctx.model,
@@ -456,7 +496,8 @@ class StudyService {
     logger.info(`[StudyService] Generating synonym question (engLevel=${ctx.engLevel})`);
 
     const wrongAnswerCount = ctx.optionCount - 1;
-    const systemInstruction = buildSynonymPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+    const systemInstruction =
+      buildSynonymPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'synonym');
 
     const { data: object, usage } = await generateStructuredOutput(SynonymQuestionSchema, {
       model: ctx.model,
@@ -483,7 +524,8 @@ class StudyService {
     logger.info(`[StudyService] Generating slang question (engLevel=${ctx.engLevel})`);
 
     const wrongAnswerCount = ctx.optionCount - 1;
-    const systemInstruction = buildSlangPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+    const systemInstruction =
+      buildSlangPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'slang');
 
     const { data: object, usage } = await generateStructuredOutput(SlangQuestionSchema, {
       model: ctx.model,
@@ -511,7 +553,7 @@ class StudyService {
 
     const wrongAnswerCount = ctx.optionCount - 1;
     const systemInstruction =
-      buildOddOneOutPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+      buildOddOneOutPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'odd-one-out');
 
     const { data: object, usage } = await generateStructuredOutput(OddOneOutQuestionSchema, {
       model: ctx.model,
@@ -580,7 +622,8 @@ class StudyService {
     logger.info(`[StudyService] Generating vocab question (engLevel=${ctx.engLevel})`);
 
     const wrongAnswerCount = ctx.optionCount - 1;
-    const systemInstruction = buildVocabPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+    const systemInstruction =
+      buildVocabPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'vocab');
 
     const { data: object, usage } = await generateStructuredOutput(VocabQuestionSchema, {
       model: ctx.model,
@@ -608,7 +651,7 @@ class StudyService {
     logger.info(`[StudyService] Batch generating ${count} vocab question(s) (engLevel=${ctx.engLevel} topic=${topic})`);
 
     const systemInstruction =
-      buildVocabPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildVocabPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildLevelInstruction(ctx, 'vocab');
     const { data, usage } = await generateStructuredOutput(VocabBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -634,7 +677,7 @@ class StudyService {
 
     const systemInstruction =
       buildPhrasePrompt(wrongAnswerCount, { count, topic, excludePhrases: excludeWords }) +
-      buildDifficultyInstruction(ctx);
+      buildLevelInstruction(ctx, 'phrase');
     const { data, usage } = await generateStructuredOutput(PhraseBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -662,7 +705,7 @@ class StudyService {
     );
 
     const systemInstruction =
-      buildFillBlankPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildFillBlankPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildLevelInstruction(ctx, 'fillblank');
     const { data, usage } = await generateStructuredOutput(FillBlankBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -694,7 +737,7 @@ class StudyService {
     );
 
     const systemInstruction =
-      buildConversationPrompt(wrongAnswerCount, { count, topic }) + buildDifficultyInstruction(ctx);
+      buildConversationPrompt(wrongAnswerCount, { count, topic }) + buildLevelInstruction(ctx, 'conversation');
     const { data, usage } = await generateStructuredOutput(ConversationBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -732,7 +775,7 @@ class StudyService {
 
     const systemInstruction =
       buildDescriptionPrompt(wrongAnswerCount, { count, topic, excludeWords, engLevel: ctx.engLevel }) +
-      buildDifficultyInstruction(ctx);
+      buildLevelInstruction(ctx, 'description');
     const { data, usage } = await generateStructuredOutput(DescriptionBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -758,7 +801,7 @@ class StudyService {
     );
 
     const systemInstruction =
-      buildSynonymPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildSynonymPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildLevelInstruction(ctx, 'synonym');
     const { data, usage } = await generateStructuredOutput(SynonymBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -781,7 +824,7 @@ class StudyService {
     logger.info(`[StudyService] Batch generating ${count} slang question(s) (engLevel=${ctx.engLevel} topic=${topic})`);
 
     const systemInstruction =
-      buildSlangPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildSlangPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildLevelInstruction(ctx, 'slang');
     const { data, usage } = await generateStructuredOutput(SlangBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -809,7 +852,8 @@ class StudyService {
     );
 
     const systemInstruction =
-      buildOddOneOutPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildOddOneOutPrompt(wrongAnswerCount, { count, topic, excludeWords }) +
+      buildLevelInstruction(ctx, 'odd-one-out');
     const { data, usage } = await generateStructuredOutput(OddOneOutBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -870,7 +914,8 @@ class StudyService {
     logger.info(`[StudyService] Generating paragraph question (engLevel=${ctx.engLevel})`);
 
     const wrongAnswerCount = ctx.optionCount - 1;
-    const systemInstruction = buildParagraphPrompt(wrongAnswerCount, { excludeWords });
+    const systemInstruction =
+      buildParagraphPrompt(wrongAnswerCount, { excludeWords }) + buildParagraphLevelInstruction(ctx);
 
     const { data: object, usage } = await generateStructuredOutput(ParagraphQuestionSchema, {
       model: ctx.model,
@@ -902,7 +947,8 @@ class StudyService {
     logger.info(`[StudyService] Generating idiom question (engLevel=${ctx.engLevel})`);
 
     const wrongAnswerCount = ctx.optionCount - 1;
-    const systemInstruction = buildIdiomPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+    const systemInstruction =
+      buildIdiomPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'idiom');
 
     const { data: object, usage } = await generateStructuredOutput(IdiomQuestionSchema, {
       model: ctx.model,
@@ -928,7 +974,7 @@ class StudyService {
     logger.info(`[StudyService] Batch generating ${count} idiom question(s) (engLevel=${ctx.engLevel} topic=${topic})`);
 
     const systemInstruction =
-      buildIdiomPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildIdiomPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildLevelInstruction(ctx, 'idiom');
     const { data, usage } = await generateStructuredOutput(IdiomBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -955,7 +1001,8 @@ class StudyService {
       `[StudyService] Batch generating ${count} paragraph question(s) (engLevel=${ctx.engLevel} topic=${topic})`
     );
 
-    const systemInstruction = buildParagraphPrompt(wrongAnswerCount, { count, topic, excludeWords });
+    const systemInstruction =
+      buildParagraphPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildParagraphLevelInstruction(ctx);
     const { data, usage } = await generateStructuredOutput(ParagraphBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -981,7 +1028,7 @@ class StudyService {
 
     const wrongAnswerCount = ctx.optionCount - 1;
     const systemInstruction =
-      buildVerbUseMatchPrompt(wrongAnswerCount, { excludeWords }) + buildDifficultyInstruction(ctx);
+      buildVerbUseMatchPrompt(wrongAnswerCount, { excludeWords }) + buildLevelInstruction(ctx, 'verb-use-match');
 
     const { data: object, usage } = await generateStructuredOutput(VerbUseMatchQuestionSchema, {
       model: ctx.model,
@@ -1016,7 +1063,8 @@ class StudyService {
     );
 
     const systemInstruction =
-      buildVerbUseMatchPrompt(wrongAnswerCount, { count, topic, excludeWords }) + buildDifficultyInstruction(ctx);
+      buildVerbUseMatchPrompt(wrongAnswerCount, { count, topic, excludeWords }) +
+      buildLevelInstruction(ctx, 'verb-use-match');
     const { data, usage } = await generateStructuredOutput(VerbUseMatchBatchSchema, {
       model: ctx.model,
       provider: ctx.provider,
@@ -1044,7 +1092,7 @@ class StudyService {
   ): Promise<{ passages: ReadingPassage[]; usage?: StructuredOutputUsage }> {
     const { count, excludeTitles = [] } = opts;
     logger.info(
-      `[StudyService] Batch generating ${count} reading passage(s) (cefrLevel=${ctx.cefrLevel} topic=${ctx.topicName} type=${ctx.type})`
+      `[StudyService] Batch generating ${count} reading passage(s) (cefrLevel=${ctx.cefrLevel} topic=${ctx.topicName} type=${ctx.type} forBeginner=${ctx.forBeginner ?? false})`
     );
 
     const systemInstruction =
@@ -1059,7 +1107,8 @@ class StudyService {
             topicName: ctx.topicName,
             cefrLevel: ctx.cefrLevel,
             count,
-            excludeTitles
+            excludeTitles,
+            forBeginner: ctx.forBeginner
           });
     const acceptBand = ctx.type === 'academic' ? ACADEMIC_READING_WORD_ACCEPT : READING_WORD_ACCEPT;
 
@@ -1102,6 +1151,7 @@ class StudyService {
       paragraphs: ctx.paragraphs,
       cefrLevel: ctx.cefrLevel,
       topicName: ctx.topicName,
+      forBeginner: ctx.forBeginner,
       previousQuestions
     });
 
@@ -1191,7 +1241,20 @@ class StudyService {
     topicName?: string | null;
     model?: string;
     context?: ModelContext;
+    forBeginner?: boolean;
   }): Promise<DifficultyContext> {
+    if (input.forBeginner) {
+      if (!isBeginnerLevel(input.engLevel)) {
+        throw new BusinessLogicException(
+          `Beginner content supports engLevel ${BEGINNER_ENG_LEVELS.join(', ')} only (got ${input.engLevel})`
+        );
+      }
+      if (input.optionCount > BEGINNER_MAX_OPTION_COUNT) {
+        throw new BusinessLogicException(
+          `Beginner content supports at most ${BEGINNER_MAX_OPTION_COUNT} options (got ${input.optionCount})`
+        );
+      }
+    }
     const resolved = await resolveStudyModel(input.context ?? 'schedule', input.model);
     return {
       engLevel: input.engLevel,
@@ -1199,7 +1262,8 @@ class StudyService {
       show5050: true,
       model: resolved.model,
       provider: resolved.provider,
-      topicName: input.topicName ?? null
+      topicName: input.topicName ?? null,
+      forBeginner: input.forBeginner ?? false
     };
   }
 
@@ -1209,12 +1273,15 @@ class StudyService {
     topicName: string;
     type: ReadingPassageType;
     model?: string;
+    forBeginner?: boolean;
   }): Promise<ReadingPassageContext> {
+    if (input.forBeginner) assertBeginnerReadingScope(input.cefrLevel, input.type);
     const resolved = await resolveStudyModel('reading', input.model);
     return {
       cefrLevel: input.cefrLevel,
       topicName: input.topicName,
       type: input.type,
+      forBeginner: input.forBeginner ?? false,
       model: resolved.model,
       provider: resolved.provider
     };
@@ -1226,7 +1293,14 @@ class StudyService {
    * chạm DB (cả file này đang thuần LLM).
    */
   async buildReadingQuestionContext(input: {
-    passage: { id: number; title: string; paragraphs: string[]; cefrLevel: string; topicName: string | null };
+    passage: {
+      id: number;
+      title: string;
+      paragraphs: string[];
+      cefrLevel: string;
+      topicName: string | null;
+      forBeginner?: boolean;
+    };
     model?: string;
   }): Promise<ReadingQuestionContext> {
     const resolved = await resolveStudyModel('reading', input.model);
@@ -1236,6 +1310,7 @@ class StudyService {
       paragraphs: input.passage.paragraphs,
       cefrLevel: input.passage.cefrLevel as EngLevel,
       topicName: input.passage.topicName ?? '',
+      forBeginner: input.passage.forBeginner ?? false,
       model: resolved.model,
       provider: resolved.provider
     };

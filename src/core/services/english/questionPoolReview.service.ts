@@ -143,6 +143,7 @@ async function reviewOne(
     optionCount: item.optionCount,
     topicId: item.topicId,
     topicName: item.topicName,
+    forBeginner: item.forBeginner,
     adminNote,
     originalData: item.questionData
   };
@@ -167,7 +168,8 @@ async function reviewOne(
       show5050: false,
       model: resolved.model,
       provider: resolved.provider,
-      topicName: item.topicName
+      topicName: item.topicName,
+      forBeginner: item.forBeginner
     };
 
     const { view, layout } = buildLearnerView(quizType, original as Record<string, unknown>);
@@ -291,6 +293,7 @@ const REVIEW_LIST_COLUMNS = {
   optionCount: englishQuestionPoolReview.optionCount,
   topicId: englishQuestionPoolReview.topicId,
   topicName: englishQuestionPoolReview.topicName,
+  forBeginner: englishQuestionPoolReview.forBeginner,
   adminNote: englishQuestionPoolReview.adminNote,
   verdict: englishQuestionPoolReview.verdict,
   summary: englishQuestionPoolReview.summary,

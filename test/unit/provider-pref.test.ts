@@ -189,12 +189,18 @@ describe('normalizeProviderPreferencesJson (jsonb schedule/manual)', () => {
 
   it('chặn provider trùng lặp và quantization lạ', () => {
     expect(() => normalizeProviderPreferencesJson({ only: ['openai', ' openai'] })).toThrow(BusinessLogicException);
-    expect(() => normalizeProviderPreferencesJson({ quantizations: ['int3' as never] })).toThrow(BusinessLogicException);
+    expect(() => normalizeProviderPreferencesJson({ quantizations: ['int3' as never] })).toThrow(
+      BusinessLogicException
+    );
   });
 
   it('trả về dạng chuẩn: list đã trim, bỏ phần tử rỗng, maxPrice dạng số chuẩn', () => {
     expect(
-      normalizeProviderPreferencesJson({ order: [' google-vertex ', ''], sort: ' price ', maxPrice: { prompt: '1.50' } })
+      normalizeProviderPreferencesJson({
+        order: [' google-vertex ', ''],
+        sort: ' price ',
+        maxPrice: { prompt: '1.50' }
+      })
     ).toEqual({ order: ['google-vertex'], sort: 'price', maxPrice: { prompt: '1.5' } });
   });
 

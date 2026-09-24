@@ -146,7 +146,10 @@ describe('tầng 2 — allow-list quizType', () => {
     const quizTypes = new Set<string>();
     for (let i = 0; i < 20; i += 1) {
       const data = await expectOk<{ quizType: string }>(
-        await api.get('/english/pool/pop', { token: restricted.apiKey, query: { engLevel: 'A1', topicId: allowedTopicId } })
+        await api.get('/english/pool/pop', {
+          token: restricted.apiKey,
+          query: { engLevel: 'A1', topicId: allowedTopicId }
+        })
       );
       quizTypes.add(data.quizType);
     }
@@ -169,7 +172,10 @@ describe('tầng 2 — allow-list quizType', () => {
     const quizTypes = new Set<string>();
     for (let i = 0; i < 30; i += 1) {
       const data = await expectOk<{ quizType: string }>(
-        await api.get('/english/pool/pop', { token: allTypes.apiKey, query: { engLevel: 'A1', topicId: allowedTopicId } })
+        await api.get('/english/pool/pop', {
+          token: allTypes.apiKey,
+          query: { engLevel: 'A1', topicId: allowedTopicId }
+        })
       );
       quizTypes.add(data.quizType);
     }

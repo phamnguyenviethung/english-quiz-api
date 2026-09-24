@@ -71,6 +71,13 @@
       "when": 1788164112614,
       "tag": "0009_fair_gideon",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790209004955,
+      "tag": "0010_sturdy_winter_soldier",
+      "breakpoints": true
     }
   ]
 }

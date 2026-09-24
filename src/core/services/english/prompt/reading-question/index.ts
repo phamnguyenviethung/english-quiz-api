@@ -13,6 +13,7 @@ import {
   OPTIONS_PER_QUESTION
 } from './common';
 import type { ReadingQuestionTypeModule } from './module';
+import { buildBeginnerReadingQuestionLevelSection } from '../beginner-prompt';
 import { attitudeModule } from './types/attitude';
 import { causeEffectModule } from './types/cause-effect';
 import { comparisonModule } from './types/comparison';
@@ -98,6 +99,7 @@ export function buildReadingQuestionPrompt(input: {
   paragraphs: string[];
   cefrLevel: EngLevel;
   topicName: string;
+  forBeginner?: boolean;
   previousQuestions?: string[];
 }): string {
   const { quizType, cefrLevel } = input;
@@ -111,7 +113,7 @@ You write exactly ONE question, of type "${quizType}". The type is already decid
 ${buildIndependenceBlock(input.previousQuestions ?? [])}
 ${buildPassageSection(input)}
 
-${buildLevelSection(cefrLevel)}
+${input.forBeginner ? buildBeginnerReadingQuestionLevelSection(cefrLevel) : buildLevelSection(cefrLevel)}
 
 ${buildSchemaBlock(quizType)}
 

@@ -1,4 +1,5 @@
 import { type EngLevel } from '../questionTypes';
+import { buildBeginnerReadingLevelBlock } from './beginner-prompt';
 
 // Reading passage = bài đọc thuần, KHÔNG kèm câu hỏi (khác hẳn reading-prompt.ts —
 // file đó sinh quiz đọc hiểu + mental math). Toàn bộ rule dưới đây bám theo
@@ -112,6 +113,7 @@ export function buildReadingPassagePrompt(input: {
   cefrLevel: EngLevel;
   count?: number;
   excludeTitles?: string[];
+  forBeginner?: boolean;
 }): string {
   const { topicName, cefrLevel } = input;
   const count = input.count ?? 1;
@@ -132,7 +134,7 @@ This is a HARD CONSTRAINT, not a suggestion. The situation in the passage must p
 
 ─── LEVEL: ${cefrLevel} ──────────────────────────────────────────────────────────
 
-${LEVEL_GUIDES[cefrLevel]}
+${input.forBeginner ? buildBeginnerReadingLevelBlock(cefrLevel) : LEVEL_GUIDES[cefrLevel]}
 
 Every level uses the SAME length. The level must show through vocabulary, sentence complexity and how ideas are connected — NEVER through how long the passage is. Do not stretch sentences at a low level to fill space, and do not compress a high level into simple ones.
 

@@ -2,9 +2,23 @@ export const ENG_LEVELS = ['A1', 'A2', 'B1', 'B2'] as const;
 
 export type EngLevel = (typeof ENG_LEVELS)[number];
 
+// Nội dung beginner (xem docs/beginner.md): độ khó tối đa B1, tối đa 4 đáp án.
+export const BEGINNER_ENG_LEVELS = ['A1', 'A2', 'B1'] as const;
+
+export type BeginnerEngLevel = (typeof BEGINNER_ENG_LEVELS)[number];
+
+export const BEGINNER_MAX_OPTION_COUNT = 4;
+
+export function isBeginnerLevel(value: string): value is BeginnerEngLevel {
+  return (BEGINNER_ENG_LEVELS as readonly string[]).includes(value);
+}
+
 export const READING_PASSAGE_TYPES = ['daily', 'academic'] as const;
 
 export type ReadingPassageType = (typeof READING_PASSAGE_TYPES)[number];
+
+// Beginner chỉ đọc bài 'daily' — bài 'academic' (expository) không dành cho người mới.
+export const BEGINNER_READING_PASSAGE_TYPE: ReadingPassageType = 'daily';
 
 export const QUIZ_TYPES = [
   'vocab',
@@ -75,6 +89,15 @@ export function getQuizTypeLabel(value: string): string {
 
 export function getQuizTypeTitle(value: string): string {
   return isQuizType(value) ? QUIZ_TYPE_DEFINITION_MAP.get(value)!.title : `Quiz ${value}`;
+}
+
+// Lọc bucket theo đối tượng khi scan/refill: 'standard' = bucket thường, 'beginner' = bucket beginner.
+export const BUCKET_AUDIENCES = ['standard', 'beginner'] as const;
+
+export type BucketAudience = (typeof BUCKET_AUDIENCES)[number];
+
+export function isBucketAudience(value: string): value is BucketAudience {
+  return (BUCKET_AUDIENCES as readonly string[]).includes(value);
 }
 
 export const QUIZ_TYPE_SELECT_OPTIONS = QUIZ_TYPE_DEFINITIONS.map(({ value, label }) => ({ value, label }));

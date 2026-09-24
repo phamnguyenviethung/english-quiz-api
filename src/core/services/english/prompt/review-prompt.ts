@@ -1,6 +1,7 @@
 import type { QuizType } from '../questionTypes';
 import type { DifficultyContext } from './vocab-prompt';
 import { QUIZ_TYPE_REVIEW_SPEC } from './review-type-spec';
+import { BEGINNER_LEVEL_NOTE } from './beginner-prompt';
 
 export type ReviewContext = DifficultyContext & { topicName?: string | null };
 
@@ -13,6 +14,11 @@ export const LEVEL_NOTE: Record<DifficultyContext['engLevel'], string> = {
   B1: 'intermediate — upper-intermediate vocabulary including academic/professional terms.',
   B2: 'upper-intermediate — advanced vocabulary, idiomatic expressions, nuanced collocations.'
 };
+
+/** Mô tả level cho review/sibling — câu beginner được soi theo chuẩn beginner (≤ B1, từ vựng SGK). */
+export function describeLearnerLevel(ctx: Pick<DifficultyContext, 'engLevel' | 'forBeginner'>): string {
+  return ctx.forBeginner ? BEGINNER_LEVEL_NOTE[ctx.engLevel] : LEVEL_NOTE[ctx.engLevel];
+}
 
 /**
  * Prompt system để review MỘT câu trong pool. KHÔNG nhồi prompt sinh câu hỏi.
@@ -39,7 +45,7 @@ Soi kỹ theo hướng admin nêu, nhưng vẫn tuân thủ EDIT DISCIPLINE. V�
 
   return `You are a meticulous English-quiz reviewer. You judge a question the way the LEARNER who takes it would — by actually trying to solve it — not by skimming. You do NOT rewrite good questions; you find concrete, quotable defects and fix only those.
 
-LEARNER LEVEL: ${ctx.engLevel} (CEFR) — ${LEVEL_NOTE[ctx.engLevel]}
+LEARNER LEVEL: ${ctx.engLevel} (CEFR) — ${describeLearnerLevel(ctx)}
 Judge the item as if TAKEN by a learner at exactly this level. A simple, clean, unambiguous question at this level is CORRECT as-is — do not "upgrade" its distractors or demand extra difficulty.
 TOPIC (soft): "${ctx.topicName ?? 'no specific topic'}" — only the central tested item + any context sentence must fit the topic; distractors are exempt.
 
@@ -78,7 +84,7 @@ For every check that FAILS you MUST add an issues[] entry that QUOTES the exact 
 10. translationMismatch — a Vietnamese field (sentenceTranslation / optionTranslations / correctAnswerTranslation / translation / highlightedWord) does not match the English; or highlightedWord is not a substring of sentenceTranslation / does not correspond to the answer.
 11. spellingOrGrammarError — a typo or grammar error in ANY field (stem, options, explanations, examples, translations). List each.
 12. offTopic — the central tested item or the context sentence does not fit the topic (distractors are exempt).
-13. levelMismatch — the tested vocabulary / difficulty is clearly above or below CEFR ${ctx.engLevel}.
+13. levelMismatch — the tested vocabulary / difficulty is clearly above or below CEFR ${ctx.engLevel}.${ctx.forBeginner ? ' This is a BEGINNER item (maximum B1): ALSO flag any rare, academic, technical or literary word, near-synonym distractors, or complex grammar a beginner coursebook would not use — and fix it with common everyday words.' : ''}
 
 FORMAT (fold into whichever issue applies, no separate flag): parallel arrays (wrong*, *Explanations, optionTranslations) must all have length ${wrongAnswerCount} and stay index-aligned; "___" present where the type requires; no proper nouns as the tested item; \`explanation\` is 1–2 Vietnamese sentences, no embedded example, no markdown.
 

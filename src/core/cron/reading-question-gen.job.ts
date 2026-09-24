@@ -172,6 +172,7 @@ export async function fillReadingQuestionBucketDetailed(
           paragraphs: passage.paragraphs,
           cefrLevel,
           topicName: passage.topicName,
+          forBeginner: passage.forBeginner,
           model: resolved.model,
           provider: resolved.provider
         },
@@ -255,6 +256,7 @@ export async function fillReadingQuestionBucketDetailed(
       topicId: passage.topicId,
       topicName: passage.topicName,
       type: passage.type,
+      forBeginner: passage.forBeginner,
       model: resolved.model,
       tokenIn,
       tokenOut

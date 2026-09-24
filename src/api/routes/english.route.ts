@@ -5,7 +5,9 @@ import {
   QuizTypeSchema,
   OptionCountSchema,
   PoolOptionCountSchema,
-  ReadingPassageTypeSchema
+  ReadingPassageTypeSchema,
+  BeginnerQuerySchema,
+  IdParam
 } from '@/api/common/schemas';
 import {
   ApiOk,
@@ -39,12 +41,15 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   .use(tenantAuthPlugin)
 
   // ── Meta ──────────────────────────────────────────────────────────────────
-  .get('/quiz-types', () => ok([...englishController.listQuizTypes()]), {
+  .get('/quiz-types', ({ query }) => ok([...englishController.listQuizTypes(query.beginner ?? false)]), {
     auth: true,
+    query: t.Object({ beginner: BeginnerQuerySchema }),
     detail: {
       tags: ['English / Meta'],
       summary: 'List quiz types',
-      description: 'Danh sách toàn bộ quizType được hỗ trợ.',
+      description:
+        'Danh sách toàn bộ quizType được hỗ trợ. `beginner=true` = chỉ các loại đang bật cho beginner ' +
+        '(config `beginner_quiz_types` giao với `quiz_distribution`).',
       security: [{ bearerAuth: [] }]
     },
     response: {
@@ -65,14 +70,18 @@ export const englishRoute = new Elysia({ prefix: '/english' })
         optionCount: OptionCountSchema,
         topic: t.Optional(t.String()),
         model: t.Optional(t.String()),
-        excludeWords: t.Optional(t.Array(t.String()))
+        excludeWords: t.Optional(t.Array(t.String())),
+        forBeginner: t.Optional(
+          t.Boolean({ description: 'true = sinh bằng prompt beginner (engLevel ≤ B1, optionCount ≤ 4).' })
+        )
       }),
       detail: {
         tags: ['English / Generation'],
         summary: 'Generate a question on-demand',
         description:
           'Sinh 1 câu hỏi bằng LLM theo `:quizType`. Shape của `question` trong response phụ thuộc quizType ' +
-          '— xem oneOf trong response schema. quizType ngoài allow-list của tenant trả 403.',
+          '— xem oneOf trong response schema. quizType ngoài allow-list của tenant trả 403. ' +
+          '`forBeginner=true` với engLevel B2, optionCount 5 hoặc quizType chưa bật cho beginner trả 400.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -117,7 +126,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
           tenant,
           query.engLevel,
           query.topicId ?? null,
-          englishController.parseExcludeIds(query.excludeIds)
+          englishController.parseExcludeIds(query.excludeIds),
+          query.beginner ?? false
         )
       ),
     {
@@ -131,7 +141,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
               'CSV id câu hỏi cần loại, vd "12,88,301". Tối đa 200 id (dư bị cắt), phần tử không phải ' +
               'số nguyên dương bị bỏ qua. Dùng để client tự chống lặp câu theo từng end-user.'
           })
-        )
+        ),
+        beginner: BeginnerQuerySchema
       }),
       detail: {
         tags: ['English / Question Pool'],
@@ -139,7 +150,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
         description:
           'Lấy 1 câu hỏi random trong bucket (engLevel, topicId) — câu KHÔNG bị xoá, pool là kho dùng lại được. ' +
           '`excludeIds` loại thêm các câu client đã phục vụ rồi. topicId ngoài allow-list trả 403. ' +
-          'Bucket trống (hoặc mọi câu đều bị loại bởi `excludeIds`) trả 404.',
+          'Bucket trống (hoặc mọi câu đều bị loại bởi `excludeIds`) trả 404. `beginner=true` chỉ lấy câu beginner ' +
+          '(chỉ loại câu đang bật cho beginner); engLevel B2 + beginner trả 400.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -154,18 +166,28 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   .get(
     '/pool/count',
     async ({ query, tenant }) =>
-      ok(await englishController.countPool(tenant, query.engLevel, query.quizType, query.topicId ?? null)),
+      ok(
+        await englishController.countPool(
+          tenant,
+          query.engLevel,
+          query.quizType,
+          query.topicId ?? null,
+          query.beginner ?? false
+        )
+      ),
     {
       auth: true,
       query: t.Object({
         engLevel: EngLevelSchema,
         quizType: QuizTypeSchema,
-        topicId: t.Optional(t.Numeric())
+        topicId: t.Optional(t.Numeric()),
+        beginner: BeginnerQuerySchema
       }),
       detail: {
         tags: ['English / Question Pool'],
         summary: 'Count questions in a pool bucket',
-        description: 'Đếm số câu hỏi hiện có trong bucket (engLevel, quizType, topicId).',
+        description:
+          'Đếm số câu hỏi hiện có trong bucket (engLevel, quizType, topicId). `beginner=true` đếm bucket beginner.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -174,6 +196,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
             engLevel: EngLevelSchema,
             quizType: QuizTypeSchema,
             topicId: t.Nullable(t.Number()),
+            forBeginner: t.Boolean(),
             count: t.Number()
           })
         ),
@@ -200,6 +223,9 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       ),
       onlySiblings: t.Optional(
         t.BooleanString({ description: 'true = chỉ lấy câu là sibling (có sourceQuestionId).' })
+      ),
+      forBeginner: t.Optional(
+        t.BooleanString({ description: 'true = chỉ câu beginner, false = chỉ câu thường. Bỏ trống = cả hai.' })
       ),
       sort: t.Optional(
         t.Union([
@@ -256,7 +282,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       quizType: QuizTypeSchema,
       optionCount: PoolOptionCountSchema,
       topicId: t.Optional(t.Nullable(t.Number())),
-      topicName: t.Optional(t.Nullable(t.String()))
+      topicName: t.Optional(t.Nullable(t.String())),
+      forBeginner: t.Optional(t.Boolean({ description: 'true = nạp bucket beginner (≤ B1, optionCount 4).' }))
     }),
     detail: {
       tags: ['English / Question Pool'],
@@ -273,17 +300,20 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       ...COMMON_ERRORS
     }
   })
-  .get('/pool/pick-quiz-type', () => ok(englishController.pickPoolQuizType()), {
+  .get('/pool/pick-quiz-type', ({ query }) => ok(englishController.pickPoolQuizType(query.beginner ?? false)), {
     auth: true,
+    query: t.Object({ beginner: BeginnerQuerySchema }),
     detail: {
       tags: ['English / Question Pool'],
       summary: 'Pick a random quiz type by weighted distribution',
       description:
-        'Chọn ngẫu nhiên 1 quizType theo trọng số cấu hình trong quiz_distribution (chỉ tính type enabled, weight>0).',
+        'Chọn ngẫu nhiên 1 quizType theo trọng số cấu hình trong quiz_distribution (chỉ tính type enabled, weight>0). ' +
+        '`beginner=true` chỉ bốc trong các loại đang bật cho beginner (không loại nào bật → 400).',
       security: [{ bearerAuth: [] }]
     },
     response: {
       200: ApiOk(t.Object({ quizType: QuizTypeSchema })),
+      400: ApiErrorSchema,
       ...COMMON_ERRORS
     }
   })
@@ -406,7 +436,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
           cefrLevel: query.cefrLevel,
           topicId: query.topicId,
           type: query.type,
-          excludeIds: englishController.parseExcludeIds(query.excludeIds)
+          excludeIds: englishController.parseExcludeIds(query.excludeIds),
+          forBeginner: query.beginner ?? false
         })
       ),
     {
@@ -420,7 +451,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
             description:
               'CSV id BÀI ĐỌC cần loại, vd "12,88". Tối đa 200 id. Dùng để client tự chống lặp bài theo end-user.'
           })
-        )
+        ),
+        beginner: BeginnerQuerySchema
       }),
       detail: {
         tags: ['English / Readings'],
@@ -432,7 +464,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
           'gắn topic nên tenant bị giới hạn sẽ chỉ thấy topic trong allow-list). `topicId` ngoài allow-list ' +
           'trả 403. Bỏ trống `type` = "daily" (không đổi hành vi với client cũ). `type` là hard filter xuyên ' +
           'suốt fallback (topicId → cefrLevel → excludeIds) — không bao giờ trả nhầm content style. ' +
-          'Không có bài nào sẵn sàng trả 404.',
+          'Không có bài nào sẵn sàng trả 404. `beginner=true` chỉ lấy bài beginner (type "daily", level ≤ B1) — ' +
+          'cờ này cũng là hard filter xuyên suốt fallback; beginner + cefrLevel B2 hoặc type "academic" trả 400.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -451,7 +484,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
         await englishController.countReadings(tenant, {
           cefrLevel: query.cefrLevel,
           topicId: query.topicId,
-          type: query.type
+          type: query.type,
+          forBeginner: query.beginner ?? false
         })
       ),
     {
@@ -459,7 +493,8 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       query: t.Object({
         cefrLevel: t.Optional(EngLevelSchema),
         topicId: t.Optional(t.Numeric()),
-        type: t.Optional(ReadingPassageTypeSchema)
+        type: t.Optional(ReadingPassageTypeSchema),
+        beginner: BeginnerQuerySchema
       }),
       detail: {
         tags: ['English / Readings'],
@@ -475,6 +510,7 @@ export const englishRoute = new Elysia({ prefix: '/english' })
             cefrLevel: t.Nullable(t.String()),
             topicId: t.Nullable(t.Number()),
             type: t.String(),
+            forBeginner: t.Boolean(),
             count: t.Number()
           })
         ),
@@ -486,29 +522,37 @@ export const englishRoute = new Elysia({ prefix: '/english' })
   )
 
   // ── Topics ──────────────────────────────────────────────────────────────────
-  .get('/topics', async ({ tenant }) => ok(await englishController.listTopics(tenant)), {
-    auth: true,
-    detail: {
-      tags: ['English / Topics'],
-      summary: 'List active topics',
-      description: 'Danh sách toàn bộ topic đang active.',
-      security: [{ bearerAuth: [] }]
-    },
-    response: {
-      200: ApiOk(t.Array(EnglishTopicSchema)),
-      ...COMMON_ERRORS
-    }
-  })
   .get(
-    '/topics/random-pairs',
-    async ({ query, tenant }) => ok(await englishController.randomTopicPairs(tenant, query.pairCount ?? 1)),
+    '/topics',
+    async ({ query, tenant }) => ok(await englishController.listTopics(tenant, query.beginner ?? false)),
     {
       auth: true,
-      query: t.Object({ pairCount: t.Optional(t.Numeric({ minimum: 1 })) }),
+      query: t.Object({ beginner: BeginnerQuerySchema }),
+      detail: {
+        tags: ['English / Topics'],
+        summary: 'List active topics',
+        description: 'Danh sách toàn bộ topic đang active. `beginner=true` = chỉ topic bật cờ beginner.',
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(t.Array(EnglishTopicSchema)),
+        ...COMMON_ERRORS
+      }
+    }
+  )
+  .get(
+    '/topics/random-pairs',
+    async ({ query, tenant }) =>
+      ok(await englishController.randomTopicPairs(tenant, query.pairCount ?? 1, query.beginner ?? false)),
+    {
+      auth: true,
+      query: t.Object({ pairCount: t.Optional(t.Numeric({ minimum: 1 })), beginner: BeginnerQuerySchema }),
       detail: {
         tags: ['English / Topics'],
         summary: 'Get random topic pairs',
-        description: 'Lấy `pairCount` cặp topic ngẫu nhiên (mặc định 1), không lặp topic giữa các cặp.',
+        description:
+          'Lấy `pairCount` cặp topic ngẫu nhiên (mặc định 1), không lặp topic giữa các cặp. ' +
+          '`beginner=true` = chỉ ghép từ topic bật cờ beginner.',
         security: [{ bearerAuth: [] }]
       },
       response: {
@@ -522,11 +566,15 @@ export const englishRoute = new Elysia({ prefix: '/english' })
     '/topics',
     async ({ body, set }) => {
       set.status = 201;
-      return created(await englishController.createTopic(body.name, body.description));
+      return created(await englishController.createTopic(body.name, body.description, body.forBeginner));
     },
     {
       auth: { admin: true },
-      body: t.Object({ name: t.String(), description: t.Optional(t.String()) }),
+      body: t.Object({
+        name: t.String(),
+        description: t.Optional(t.String()),
+        forBeginner: t.Optional(t.Boolean({ description: 'true = topic dùng cho nội dung beginner. Mặc định false.' }))
+      }),
       detail: {
         tags: ['English / Topics'],
         summary: 'Create topic',
@@ -542,6 +590,37 @@ export const englishRoute = new Elysia({ prefix: '/english' })
       }
     }
   )
+  .patch('/topics/:id', async ({ params, body }) => ok(await englishController.updateTopic(params.id, body)), {
+    auth: { admin: true },
+    params: IdParam,
+    body: t.Object({
+      displayName: t.Optional(t.Nullable(t.String())),
+      description: t.Optional(t.Nullable(t.String())),
+      isActive: t.Optional(t.Boolean()),
+      forBeginner: t.Optional(
+        t.Boolean({
+          description:
+            'true = sinh + phục vụ nội dung beginner cho topic này (bucket A1–B1, 4 đáp án). false = ngừng sinh ' +
+            'bucket beginner mới; câu/bài beginner đã có vẫn giữ nguyên.'
+        })
+      )
+    }),
+    detail: {
+      tags: ['English / Topics'],
+      summary: 'Update topic',
+      description:
+        'Cập nhật topic (partial). Dùng để bật/tắt cờ beginner, đổi displayName/description hoặc tắt topic. ' +
+        'Body rỗng trả 400, topic không tồn tại trả 404. Chỉ dùng được với tài khoản admin.',
+      security: [{ bearerAuth: [] }]
+    },
+    response: {
+      200: ApiOk(EnglishTopicSchema),
+      400: ApiErrorSchema,
+      403: ApiErrorSchema,
+      404: ApiErrorSchema,
+      ...COMMON_ERRORS
+    }
+  })
 
   // ── Cron tracking (admin/observability) ─────────────────────────────────────
   .get('/cron/runs', async ({ query }) => ok(await englishController.listCronRuns(query.limit ?? 8)), {

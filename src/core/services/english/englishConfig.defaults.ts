@@ -121,6 +121,19 @@ export const QuizDistributionSchema = z
     message: 'At least one enabled quiz type must have weight > 0'
   });
 
+// Loại câu nào được sinh/phục vụ cho beginner. Chỉ có tác dụng khi loại đó cũng đang bật ở
+// quiz_distribution (kill switch chung) — xem getBeginnerQuizTypes ở questionPool.service.
+export const BeginnerQuizTypesSchema = z
+  .array(
+    z.object({
+      quizType: quizTypeSchema,
+      enabled: z.boolean()
+    })
+  )
+  .refine((items) => new Set(items.map((item) => item.quizType)).size === items.length, {
+    message: 'Each quiz type may appear only once'
+  });
+
 export const JobFlagsSchema = z.object({
   questionGenEnabled: z.boolean(),
   poolRefillEnabled: z.boolean(),
@@ -135,6 +148,7 @@ export const JobFlagsSchema = z.object({
 export const EnglishConfigSchemas = {
   question_pool: QuestionPoolSchema,
   quiz_distribution: QuizDistributionSchema,
+  beginner_quiz_types: BeginnerQuizTypesSchema,
   job_flags: JobFlagsSchema,
   pool_refill_schedule: PoolRefillScheduleSchema,
   sibling_gen: SiblingGenSchema,
@@ -167,6 +181,20 @@ export const EnglishConfigDefaults = {
     { quizType: 'paragraph', weight: 8, enabled: true },
     { quizType: 'idiom', weight: 8, enabled: true },
     { quizType: 'verb-use-match', weight: 10, enabled: true }
+  ],
+  // slang/idiom mặc định tắt: ít gặp trong sách giáo khoa, khó với người mới học.
+  beginner_quiz_types: [
+    { quizType: 'vocab', enabled: true },
+    { quizType: 'fillblank', enabled: true },
+    { quizType: 'phrase', enabled: true },
+    { quizType: 'conversation', enabled: true },
+    { quizType: 'description', enabled: true },
+    { quizType: 'synonym', enabled: true },
+    { quizType: 'slang', enabled: false },
+    { quizType: 'odd-one-out', enabled: true },
+    { quizType: 'paragraph', enabled: true },
+    { quizType: 'idiom', enabled: false },
+    { quizType: 'verb-use-match', enabled: true }
   ],
   job_flags: {
     questionGenEnabled: true,
@@ -220,6 +248,7 @@ export const EnglishConfigDefaults = {
 export type EnglishConfigKey = keyof typeof EnglishConfigDefaults;
 export type QuestionPoolConfig = z.infer<typeof QuestionPoolSchema>;
 export type QuizDistributionConfig = z.infer<typeof QuizDistributionSchema>;
+export type BeginnerQuizTypesConfig = z.infer<typeof BeginnerQuizTypesSchema>;
 export type JobFlagsConfig = z.infer<typeof JobFlagsSchema>;
 export type SiblingGenConfig = z.infer<typeof SiblingGenSchema>;
 export type ReadingPassageConfig = z.infer<typeof ReadingPassageSchema>;
@@ -314,6 +343,19 @@ const quizDistributionField: EnglishConfigFieldSchema = {
     },
     weight: intField('Trọng số', 0),
     enabled: boolField('Bật')
+  }
+};
+
+const beginnerQuizTypesField: EnglishConfigFieldSchema = {
+  type: 'arr',
+  label: 'Loại câu hỏi cho beginner',
+  itemFields: {
+    quizType: {
+      type: 'str',
+      label: 'Loại câu hỏi',
+      options: QUIZ_TYPES
+    },
+    enabled: boolField('Bật cho beginner')
   }
 };
 
@@ -561,6 +603,20 @@ export const ENGLISH_CONFIG_RECORD_DEFINITIONS: EnglishConfigRecordDefinition[] 
     sortOrder: 1050
   },
   {
+    recordKey: 'beginner_quiz_types.items',
+    namespace: 'beginner_quiz_types',
+    path: 'items',
+    category: 'questions',
+    label: 'Loại câu hỏi cho beginner',
+    description:
+      'Loại câu hỏi được sinh và phục vụ cho người mới học (≤ B1, ≤ 4 đáp án). Chỉ có tác dụng khi loại đó cũng đang bật ở Phân bổ loại câu hỏi. Bucket beginner chỉ được tạo cho topic bật cờ beginner.',
+    recordType: 'arr',
+    defaultValue: EnglishConfigDefaults.beginner_quiz_types,
+    validation: beginnerQuizTypesField,
+    uiSchema: beginnerQuizTypesField,
+    sortOrder: 1060
+  },
+  {
     recordKey: 'job_flags.questionGenEnabled',
     namespace: 'job_flags',
     path: 'questionGenEnabled',
@@ -743,6 +799,7 @@ export function buildDefaultEnglishConfigSnapshot(): EnglishConfigSnapshot {
   return {
     question_pool: QuestionPoolSchema.parse(EnglishConfigDefaults.question_pool),
     quiz_distribution: QuizDistributionSchema.parse(EnglishConfigDefaults.quiz_distribution),
+    beginner_quiz_types: BeginnerQuizTypesSchema.parse(EnglishConfigDefaults.beginner_quiz_types),
     job_flags: JobFlagsSchema.parse(EnglishConfigDefaults.job_flags),
     pool_refill_schedule: PoolRefillScheduleSchema.parse(EnglishConfigDefaults.pool_refill_schedule),
     sibling_gen: SiblingGenSchema.parse(EnglishConfigDefaults.sibling_gen),

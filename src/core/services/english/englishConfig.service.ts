@@ -134,6 +134,10 @@ function applyRecordValue(raw: EnglishConfigSnapshot, def: EnglishConfigRecordDe
     raw.quiz_distribution = value as EnglishConfigSnapshot['quiz_distribution'];
     return;
   }
+  if (def.namespace === 'beginner_quiz_types' && def.path === 'items') {
+    raw.beginner_quiz_types = value as EnglishConfigSnapshot['beginner_quiz_types'];
+    return;
+  }
   if (def.namespace === 'pool_refill_schedule' && def.path === 'items') {
     raw.pool_refill_schedule = value as EnglishConfigSnapshot['pool_refill_schedule'];
     return;

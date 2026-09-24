@@ -10,9 +10,10 @@ async function ensurePoolFilled(
   topicId: number | null,
   topicName: string | null,
   quizType: QuizType,
-  optionCount: 4 | 5
+  optionCount: 4 | 5,
+  forBeginner = false
 ): Promise<void> {
-  await poolRefillService.runOnDemandRefill({ engLevel, topicId, topicName, quizType, optionCount });
+  await poolRefillService.runOnDemandRefill({ engLevel, topicId, topicName, quizType, optionCount, forBeginner });
 }
 
 export default {

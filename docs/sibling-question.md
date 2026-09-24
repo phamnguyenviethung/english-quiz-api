@@ -87,7 +87,7 @@ Mỗi candidate model trả về đi qua các cổng validate (`validateCandidat
 3. **Độ dài mảng** — `wrongAnswers` / `wrongAnswerExplanations` / `optionTranslations` phải đúng `optionCount - 1`, index-aligned.
 4. **Dedupe** — chữ ký ngữ cảnh (`sentence` / `dialogueLines` / `description` / bộ `wrongAnswers`, cộng `exampleSentence`) trùng byte câu gốc → `failed++` (model không thật sự đổi).
 
-Candidate đạt → `INSERT INTO english_question_pool` (`sourceQuestionId = câu gốc`, token chia đều cho các candidate đạt). Manual `forceInsert: true` bỏ qua cap; auto `forceInsert: false` tôn trọng `question_pool.maxPerBucket`.
+Candidate đạt → `INSERT INTO english_question_pool` (`sourceQuestionId = câu gốc`, `forBeginner` = cờ của câu gốc, token chia đều cho các candidate đạt). Câu gốc beginner → prompt sibling mô tả level theo chuẩn beginner (`describeLearnerLevel`), sibling nằm cùng bucket beginner (xem [`beginner.md`](./beginner.md)). Manual `forceInsert: true` bỏ qua cap; auto `forceInsert: false` tôn trọng `question_pool.maxPerBucket`.
 
 ## Endpoints (`Admin / Pool Sibling`, session admin)
 

@@ -16,17 +16,17 @@ Nguồn quy tắc nội dung: [`question-generator-guideline.md`](./question-gen
 
 Bảng `english_reading_questions`:
 
-| Cột                                            | Ghi chú                                                                    |
-| ---------------------------------------------- | -------------------------------------------------------------------------- |
-| `passageRefId`                                 | FK → `english_reading_passages.id`, **ON DELETE CASCADE**                  |
-| `quizType`                                     | 1 trong 19 type ở `readingQuestionTypes.ts`, bị giới hạn theo CEFR level   |
-| `question`                                     | Câu hỏi (tiếng Anh)                                                        |
-| `options`                                      | `jsonb` — đúng 4 đáp án                                                    |
-| `correctAnswer`                                | **Index 0-based** vào `options`, không phải chữ cái, không phải nội dung   |
-| `explanation`                                  | 1 câu tiếng Việt, trỏ tới đoạn chứa evidence                               |
-| `cefrLevel` / `topicId` / `topicName` / `type` | Snapshot từ passage để list/filter không phải join                         |
-| `model`, `tokenIn`, `tokenOut`                 | Truy vết chi phí (token của cả batch, lặp trên mỗi dòng)                   |
-| `isActive`                                     | Tắt câu kém mà không xoá. Câu đã tắt **không** tính là "bài đã có câu hỏi" |
+| Cột                                                            | Ghi chú                                                                                                                                                              |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `passageRefId`                                                 | FK → `english_reading_passages.id`, **ON DELETE CASCADE**                                                                                                            |
+| `quizType`                                                     | 1 trong 19 type ở `readingQuestionTypes.ts`, bị giới hạn theo CEFR level                                                                                             |
+| `question`                                                     | Câu hỏi (tiếng Anh)                                                                                                                                                  |
+| `options`                                                      | `jsonb` — đúng 4 đáp án                                                                                                                                              |
+| `correctAnswer`                                                | **Index 0-based** vào `options`, không phải chữ cái, không phải nội dung                                                                                             |
+| `explanation`                                                  | 1 câu tiếng Việt, trỏ tới đoạn chứa evidence                                                                                                                         |
+| `cefrLevel` / `topicId` / `topicName` / `type` / `forBeginner` | Snapshot từ passage để list/filter không phải join. Bài beginner → câu hỏi viết theo `buildBeginnerReadingQuestionLevelSection` (xem [`beginner.md`](./beginner.md)) |
+| `model`, `tokenIn`, `tokenOut`                                 | Truy vết chi phí (token của cả batch, lặp trên mỗi dòng)                                                                                                             |
+| `isActive`                                                     | Tắt câu kém mà không xoá. Câu đã tắt **không** tính là "bài đã có câu hỏi"                                                                                           |
 
 Cột thêm vào `english_reading_passages`: `questionGenAttempts` — xem [Chống lặp vô hạn](#chống-lặp-vô-hạn).
 

@@ -21,7 +21,8 @@ import { englishQuestionPool, englishTopic, type InsertEnglishQuestionPool } fro
 import type { DifficultyContext } from './study.service';
 import random from '@/utils/chance';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
-import type { QuizType } from './questionTypes';
+import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
+import { BEGINNER_ENG_LEVELS, BEGINNER_MAX_OPTION_COUNT, isBeginnerLevel, type QuizType } from './questionTypes';
 
 export interface PoolQuestion {
   id: number;
@@ -33,6 +34,7 @@ export interface PoolQuestion {
   optionCount: number;
   topicId: number | null;
   sourceQuestionId: number | null;
+  forBeginner: boolean;
 }
 
 export interface PoolQuestionListItem extends PoolQuestion {
@@ -66,6 +68,8 @@ export interface ListPoolQuestionsInput {
   sourceQuestionId?: number;
   // Chỉ lấy câu là sibling (sourceQuestionId IS NOT NULL).
   onlySiblings?: boolean;
+  // undefined = cả câu thường lẫn câu beginner.
+  forBeginner?: boolean;
   sort?: PoolQuestionsSort;
   page?: number;
   pageSize?: number;
@@ -98,6 +102,22 @@ export interface PushQuestionInput {
   topicId?: number | null;
   // Trỏ về câu pool gốc khi đây là một câu tương tự (sibling). Xem sibling-question.md.
   sourceQuestionId?: number | null;
+  forBeginner?: boolean;
+}
+
+/**
+ * Key bucket = `${engLevel}:${topicId ?? 'null'}:${quizType}`, bucket beginner thêm hậu tố
+ * `:beginner`. Key thường giữ nguyên format cũ để lịch sử refill (english_cron_job_buckets)
+ * vẫn khớp. Mọi nơi đếm/scan/plan phải đi qua hàm này, không tự ghép chuỗi.
+ */
+export function bucketKeyOf(input: {
+  engLevel: string;
+  topicId: number | null;
+  quizType: string;
+  forBeginner?: boolean;
+}): string {
+  const base = `${input.engLevel}:${input.topicId ?? 'null'}:${input.quizType}`;
+  return input.forBeginner ? `${base}:beginner` : base;
 }
 
 export function getMaxPoolSize(): number {
@@ -113,8 +133,28 @@ export function getPerBucketGenerationCap(): number {
   return getEnglishConfigSnapshot().question_pool.perBucketGenerationCap;
 }
 
-export function pickQuizType(): QuizType {
-  const enabledItems = getEnglishConfigSnapshot().quiz_distribution.filter((item) => item.enabled && item.weight > 0);
+/**
+ * Loại câu dành cho beginner = bật ở beginner_quiz_types VÀ đang bật (weight > 0) ở
+ * quiz_distribution — quiz_distribution là kill switch chung cho mọi luồng.
+ */
+export function getBeginnerQuizTypes(): QuizType[] {
+  const snapshot = getEnglishConfigSnapshot();
+  const beginnerEnabled = new Set(
+    snapshot.beginner_quiz_types.filter((item) => item.enabled).map((item) => item.quizType)
+  );
+  return snapshot.quiz_distribution
+    .filter((item) => item.enabled && item.weight > 0 && beginnerEnabled.has(item.quizType))
+    .map((item) => item.quizType as QuizType);
+}
+
+export function pickQuizType(options?: { forBeginner?: boolean }): QuizType {
+  const beginnerTypes = options?.forBeginner ? new Set<string>(getBeginnerQuizTypes()) : null;
+  const enabledItems = getEnglishConfigSnapshot().quiz_distribution.filter(
+    (item) => item.enabled && item.weight > 0 && (beginnerTypes === null || beginnerTypes.has(item.quizType))
+  );
+  if (enabledItems.length === 0) {
+    throw new BusinessLogicException('No quiz type is enabled for beginner content');
+  }
   const totalWeight = enabledItems.reduce((sum, item) => sum + item.weight, 0);
   const distribution = enabledItems.map((item) => ({
     percentage: (item.weight / totalWeight) * 100,
@@ -125,6 +165,10 @@ export function pickQuizType(): QuizType {
 
 function buildTopicCondition(topicId: number | null) {
   return topicId !== null ? eq(englishQuestionPool.topicId, topicId) : isNull(englishQuestionPool.topicId);
+}
+
+function buildBeginnerCondition(forBeginner: boolean) {
+  return eq(englishQuestionPool.forBeginner, forBeginner);
 }
 
 // drizzle ilike() không tự escape — % và _ gõ bởi người dùng phải escape thủ công,
@@ -145,8 +189,7 @@ async function listPoolModels(): Promise<PoolModelStat[]> {
 }
 
 /**
- * Count của MỌI bucket trong 1 query, key = `${engLevel}:${topicId ?? 'null'}:${quizType}`
- * (khớp bucketKeyOf ở poolRefill.service). Dùng cho scan bucket — gọi getPoolCount lần lượt
+ * Count của MỌI bucket trong 1 query, key theo bucketKeyOf (câu beginner là bucket riêng). Dùng cho scan bucket — gọi getPoolCount lần lượt
  * cho từng bucket là hàng nghìn round-trip khi số topic lớn.
  */
 async function getPoolCountsByBucket(): Promise<Map<string, number>> {
@@ -155,12 +198,18 @@ async function getPoolCountsByBucket(): Promise<Map<string, number>> {
       engLevel: englishQuestionPool.engLevel,
       quizType: englishQuestionPool.quizType,
       topicId: englishQuestionPool.topicId,
+      forBeginner: englishQuestionPool.forBeginner,
       total: count()
     })
     .from(englishQuestionPool)
-    .groupBy(englishQuestionPool.engLevel, englishQuestionPool.quizType, englishQuestionPool.topicId);
+    .groupBy(
+      englishQuestionPool.engLevel,
+      englishQuestionPool.quizType,
+      englishQuestionPool.topicId,
+      englishQuestionPool.forBeginner
+    );
 
-  return new Map(rows.map((row) => [`${row.engLevel}:${row.topicId ?? 'null'}:${row.quizType}`, row.total]));
+  return new Map(rows.map((row) => [bucketKeyOf(row), row.total]));
 }
 
 /**
@@ -173,16 +222,27 @@ async function getSiblingSourceCountsByBucket(): Promise<Map<string, number>> {
       engLevel: englishQuestionPool.engLevel,
       quizType: englishQuestionPool.quizType,
       topicId: englishQuestionPool.topicId,
+      forBeginner: englishQuestionPool.forBeginner,
       total: count()
     })
     .from(englishQuestionPool)
     .where(isNull(englishQuestionPool.sourceQuestionId))
-    .groupBy(englishQuestionPool.engLevel, englishQuestionPool.quizType, englishQuestionPool.topicId);
+    .groupBy(
+      englishQuestionPool.engLevel,
+      englishQuestionPool.quizType,
+      englishQuestionPool.topicId,
+      englishQuestionPool.forBeginner
+    );
 
-  return new Map(rows.map((row) => [`${row.engLevel}:${row.topicId ?? 'null'}:${row.quizType}`, row.total]));
+  return new Map(rows.map((row) => [bucketKeyOf(row), row.total]));
 }
 
-async function getPoolCount(engLevel: string, quizType: QuizType, topicId: number | null = null): Promise<number> {
+async function getPoolCount(
+  engLevel: string,
+  quizType: QuizType,
+  topicId: number | null = null,
+  forBeginner = false
+): Promise<number> {
   const [result] = await db
     .select({ total: count() })
     .from(englishQuestionPool)
@@ -190,7 +250,8 @@ async function getPoolCount(engLevel: string, quizType: QuizType, topicId: numbe
       and(
         eq(englishQuestionPool.engLevel, engLevel),
         eq(englishQuestionPool.quizType, quizType),
-        buildTopicCondition(topicId)
+        buildTopicCondition(topicId),
+        buildBeginnerCondition(forBeginner)
       )
     );
   return result?.total ?? 0;
@@ -206,7 +267,8 @@ function mapRowToPoolQuestion(row: typeof englishQuestionPool.$inferSelect): Poo
     tokenOut: row.tokenOut,
     optionCount: row.optionCount,
     topicId: row.topicId,
-    sourceQuestionId: row.sourceQuestionId
+    sourceQuestionId: row.sourceQuestionId,
+    forBeginner: row.forBeginner
   };
 }
 
@@ -225,16 +287,22 @@ function mapRowToPoolQuestion(row: typeof englishQuestionPool.$inferSelect): Poo
 /**
  * `allowedQuizTypes` = allow-list quizType của tenant (null = không giới hạn). Pop không nhận
  * quizType cụ thể nên không assert 403 được — phải lọc kết quả, giống /topics.
+ * `forBeginner` chọn bucket: câu beginner và câu thường không bao giờ trộn.
  */
 async function popQuestion(
   engLevel: string,
   topicId: number | null = null,
   excludeIds: number[] = [],
-  allowedQuizTypes: readonly string[] | null = null
+  allowedQuizTypes: readonly string[] | null = null,
+  forBeginner = false
 ): Promise<PoolQuestion | null> {
   if (allowedQuizTypes !== null && allowedQuizTypes.length === 0) return null;
 
-  const conditions = [eq(englishQuestionPool.engLevel, engLevel), buildTopicCondition(topicId)];
+  const conditions = [
+    eq(englishQuestionPool.engLevel, engLevel),
+    buildTopicCondition(topicId),
+    buildBeginnerCondition(forBeginner)
+  ];
   if (excludeIds.length > 0) conditions.push(notInArray(englishQuestionPool.id, excludeIds));
   if (allowedQuizTypes !== null) conditions.push(inArray(englishQuestionPool.quizType, [...allowedQuizTypes]));
 
@@ -248,7 +316,7 @@ async function popQuestion(
   if (!row) return null;
 
   logger.info(
-    `[QuestionPool] Popped question id=${row.id} type=${row.quizType} model=${row.model} engLevel=${engLevel} topicId=${topicId} excluded=${excludeIds.length}`
+    `[QuestionPool] Popped question id=${row.id} type=${row.quizType} model=${row.model} engLevel=${engLevel} topicId=${topicId} forBeginner=${forBeginner} excluded=${excludeIds.length}`
   );
   return mapRowToPoolQuestion(row);
 }
@@ -270,6 +338,7 @@ async function getPoolQuestionById(id: number): Promise<PoolQuestionListItem | n
       tokenOut: englishQuestionPool.tokenOut,
       topicId: englishQuestionPool.topicId,
       sourceQuestionId: englishQuestionPool.sourceQuestionId,
+      forBeginner: englishQuestionPool.forBeginner,
       topicDisplayName: englishTopic.displayName,
       topicRawName: englishTopic.name,
       createdAt: englishQuestionPool.createdAt
@@ -292,6 +361,7 @@ async function getPoolQuestionById(id: number): Promise<PoolQuestionListItem | n
     optionCount: row.optionCount,
     topicId: row.topicId,
     sourceQuestionId: row.sourceQuestionId,
+    forBeginner: row.forBeginner,
     topicName: row.topicDisplayName ?? row.topicRawName ?? null,
     createdAt: row.createdAt
   };
@@ -335,6 +405,7 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
   } else if (input.onlySiblings) {
     conditions.push(isNotNull(englishQuestionPool.sourceQuestionId));
   }
+  if (input.forBeginner !== undefined) conditions.push(buildBeginnerCondition(input.forBeginner));
 
   // createdAt nullable — row cũ chưa có createdAt sẽ bị loại khi lọc theo khoảng ngày.
   if (input.createdFrom) conditions.push(gte(englishQuestionPool.createdAt, new Date(input.createdFrom)));
@@ -365,6 +436,7 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
         tokenOut: englishQuestionPool.tokenOut,
         topicId: englishQuestionPool.topicId,
         sourceQuestionId: englishQuestionPool.sourceQuestionId,
+        forBeginner: englishQuestionPool.forBeginner,
         topicDisplayName: englishTopic.displayName,
         topicRawName: englishTopic.name,
         createdAt: englishQuestionPool.createdAt
@@ -390,6 +462,7 @@ async function listQuestions(input: ListPoolQuestionsInput): Promise<PoolQuestio
     optionCount: row.optionCount,
     topicId: row.topicId,
     sourceQuestionId: row.sourceQuestionId,
+    forBeginner: row.forBeginner,
     topicName: row.topicDisplayName ?? row.topicRawName ?? null,
     createdAt: row.createdAt
   }));
@@ -406,7 +479,8 @@ async function pickSiblingSourceIds(
   engLevel: string,
   quizType: QuizType,
   topicId: number | null,
-  limit: number
+  limit: number,
+  forBeginner = false
 ): Promise<number[]> {
   if (limit <= 0) return [];
   const rows = await db
@@ -417,6 +491,7 @@ async function pickSiblingSourceIds(
         eq(englishQuestionPool.engLevel, engLevel),
         eq(englishQuestionPool.quizType, quizType),
         buildTopicCondition(topicId),
+        buildBeginnerCondition(forBeginner),
         isNull(englishQuestionPool.sourceQuestionId)
       )
     )
@@ -425,38 +500,46 @@ async function pickSiblingSourceIds(
   return rows.map((row) => row.id);
 }
 
+function poolBucketKeyOf(q: PushQuestionInput): string {
+  return bucketKeyOf({
+    engLevel: q.engLevel,
+    topicId: q.topicId ?? null,
+    quizType: q.quizType,
+    forBeginner: q.forBeginner
+  });
+}
+
 async function pushQuestions(questions: PushQuestionInput[]): Promise<number> {
   if (questions.length === 0) return 0;
 
   const inserted = await db.transaction(async (tx) => {
-    const bucketKeys = [...new Set(questions.map((q) => `${q.engLevel}:${q.topicId ?? 'null'}:${q.quizType}`))];
+    const bucketByKey = new Map(questions.map((q) => [poolBucketKeyOf(q), q]));
     const bucketCounts = new Map<string, number>();
     let insertedCount = 0;
 
-    for (const key of bucketKeys) {
-      const [engLevel, topicIdStr, quizType] = key.split(':');
-      const topicId = topicIdStr === 'null' ? null : Number(topicIdStr);
+    for (const [key, q] of bucketByKey) {
       const [result] = await tx
         .select({ total: count() })
         .from(englishQuestionPool)
         .where(
           and(
-            eq(englishQuestionPool.engLevel, engLevel!),
-            eq(englishQuestionPool.quizType, quizType!),
-            buildTopicCondition(topicId)
+            eq(englishQuestionPool.engLevel, q.engLevel),
+            eq(englishQuestionPool.quizType, q.quizType),
+            buildTopicCondition(q.topicId ?? null),
+            buildBeginnerCondition(q.forBeginner ?? false)
           )
         );
       bucketCounts.set(key, result?.total ?? 0);
     }
 
     for (const q of questions) {
-      const key = `${q.engLevel}:${q.topicId ?? 'null'}:${q.quizType}`;
+      const key = poolBucketKeyOf(q);
       const currentCount = bucketCounts.get(key) ?? 0;
 
       const maxPool = getMaxPoolSize();
       if (currentCount >= maxPool) {
         logger.info(
-          `[QuestionPool] Bucket full (${currentCount}/${maxPool}) for engLevel=${q.engLevel} topicId=${q.topicId} quizType=${q.quizType}, skipping`
+          `[QuestionPool] Bucket full (${currentCount}/${maxPool}) for engLevel=${q.engLevel} topicId=${q.topicId} quizType=${q.quizType} forBeginner=${q.forBeginner ?? false}, skipping`
         );
         continue;
       }
@@ -470,7 +553,8 @@ async function pushQuestions(questions: PushQuestionInput[]): Promise<number> {
         tokenIn: q.tokenIn,
         tokenOut: q.tokenOut,
         topicId: q.topicId ?? null,
-        sourceQuestionId: q.sourceQuestionId ?? null
+        sourceQuestionId: q.sourceQuestionId ?? null,
+        forBeginner: q.forBeginner ?? false
       };
 
       await tx.insert(englishQuestionPool).values(values);
@@ -483,6 +567,51 @@ async function pushQuestions(questions: PushQuestionInput[]): Promise<number> {
 
   logger.info(`[QuestionPool] Pushed ${inserted}/${questions.length} question(s)`);
   return inserted;
+}
+
+/**
+ * Admin đánh dấu / bỏ đánh dấu một câu là câu beginner — câu chuyển sang bucket kia ngay.
+ * Chỉ câu level ≤ B1, ≤ 4 đáp án và thuộc loại câu đang bật cho beginner mới được đánh dấu.
+ */
+async function setQuestionForBeginner(id: number, forBeginner: boolean): Promise<PoolQuestionListItem> {
+  await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({
+        engLevel: englishQuestionPool.engLevel,
+        optionCount: englishQuestionPool.optionCount,
+        quizType: englishQuestionPool.quizType
+      })
+      .from(englishQuestionPool)
+      .where(eq(englishQuestionPool.id, id))
+      .limit(1);
+    if (!row) throw new NotFoundException(`Không tìm thấy câu pool: ${id}`);
+
+    if (forBeginner) {
+      if (!isBeginnerLevel(row.engLevel)) {
+        throw new BusinessLogicException(
+          `Chỉ câu level ${BEGINNER_ENG_LEVELS.join(', ')} mới được đánh dấu beginner (câu #${id} là ${row.engLevel})`
+        );
+      }
+      if (row.optionCount > BEGINNER_MAX_OPTION_COUNT) {
+        throw new BusinessLogicException(
+          `Câu beginner tối đa ${BEGINNER_MAX_OPTION_COUNT} đáp án (câu #${id} có ${row.optionCount})`
+        );
+      }
+      if (!getBeginnerQuizTypes().includes(row.quizType as QuizType)) {
+        throw new BusinessLogicException(`Loại câu "${row.quizType}" chưa được bật cho beginner`);
+      }
+    }
+
+    await tx
+      .update(englishQuestionPool)
+      .set({ forBeginner, updatedAt: new Date() })
+      .where(eq(englishQuestionPool.id, id));
+  });
+
+  logger.info(`[QuestionPool] Set forBeginner=${forBeginner} for question id=${id}`);
+  const updated = await getPoolQuestionById(id);
+  if (!updated) throw new NotFoundException(`Không tìm thấy câu pool: ${id}`);
+  return updated;
 }
 
 async function clearPool(engLevel?: string, topicId?: number | null): Promise<void> {
@@ -509,6 +638,7 @@ export default {
   listPoolModels,
   pushQuestions,
   pickSiblingSourceIds,
+  setQuestionForBeginner,
   clearPool,
   getMaxPoolSize,
   getRefillThreshold,

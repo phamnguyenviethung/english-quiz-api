@@ -20,20 +20,23 @@ Nguồn quy tắc nội dung: [`reading-prompt-guideline.md`](./reading-prompt-g
 
 Bảng `english_reading_passages`:
 
-| Cột                            | Ghi chú                                                                                              |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `title`                        | Tiêu đề ngắn do model đặt                                                                            |
-| `paragraphs`                   | `jsonb` mảng đoạn văn theo đúng thứ tự đọc                                                           |
-| `wordCount`                    | **Đếm lại server-side** từ `paragraphs`, không tin số model trả về                                   |
-| `cefrLevel`                    | A1/A2/B1/B2 (dùng chung `ENG_LEVELS`)                                                                |
-| `topicId` / `topicName`        | FK topic + snapshot tên lúc sinh (chính là input của prompt)                                         |
-| `type`                         | `daily` (mặc định) / `academic` — xem `READING_PASSAGE_TYPES`. Chỉ set lúc sinh, không sửa qua PATCH |
-| `model`, `tokenIn`, `tokenOut` | Truy vết chi phí                                                                                     |
-| `isActive`                     | Tắt bài kém mà không xoá. Bài đã tắt **không** tính vào bucket count                                 |
+| Cột                            | Ghi chú                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `title`                        | Tiêu đề ngắn do model đặt                                                                                      |
+| `paragraphs`                   | `jsonb` mảng đoạn văn theo đúng thứ tự đọc                                                                     |
+| `wordCount`                    | **Đếm lại server-side** từ `paragraphs`, không tin số model trả về                                             |
+| `cefrLevel`                    | A1/A2/B1/B2 (dùng chung `ENG_LEVELS`)                                                                          |
+| `topicId` / `topicName`        | FK topic + snapshot tên lúc sinh (chính là input của prompt)                                                   |
+| `type`                         | `daily` (mặc định) / `academic` — xem `READING_PASSAGE_TYPES`. Chỉ set lúc sinh, không sửa qua PATCH           |
+| `model`, `tokenIn`, `tokenOut` | Truy vết chi phí                                                                                               |
+| `isActive`                     | Tắt bài kém mà không xoá. Bài đã tắt **không** tính vào bucket count                                           |
+| `forBeginner`                  | Bài beginner (≤ B1, chỉ `daily`, prompt beginner) — chiều thứ 4 của bucket. Xem [`beginner.md`](./beginner.md) |
 
 **Bucket = `(cefrLevel, topicId, type)`** — 3 chiều. `bucketKey` dạng `"B1:7:daily"`. Cron auto-refill quét cả 2 type trong cùng lịch (`reading-refill-daily`) nên khối lượng sinh mỗi lần chạy tăng gấp đôi so với trước khi có `type`.
 
 Reading luôn gắn với 1 topic (prompt cần `topicName` để khoá chủ đề) — không có bucket "no topic".
+
+Bucket beginner: topic bật `forBeginner` × A1–B1 × chỉ `daily`, key `"A2:7:daily:beginner"` (luôn qua `readingBucketKeyOf()`). Prompt dùng `buildBeginnerReadingLevelBlock` thay khối LEVEL; word band giữ nguyên. `PATCH /admin/readings/:id { forBeginner }` đổi cờ bài (chỉ bài A1–B1, `daily`) và cờ mọi câu hỏi của bài trong cùng transaction.
 
 ## Độ dài
 

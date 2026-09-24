@@ -7,12 +7,21 @@ import { fillReadingBucketDetailed, type ReadingGenJobData } from '@/core/cron/r
 import readingPassageService, {
   getMaxPerBucket,
   getPerBucketGenerationCap,
-  getRefillThreshold
+  getRefillThreshold,
+  readingBucketKeyOf
 } from './readingPassage.service';
 import topicService from './topic.service';
 import { buildRefillPlan, type RefillPlanResult } from './poolRefill.service';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
-import { ENG_LEVELS, READING_PASSAGE_TYPES, type EngLevel, type ReadingPassageType } from './questionTypes';
+import {
+  BEGINNER_ENG_LEVELS,
+  BEGINNER_READING_PASSAGE_TYPE,
+  ENG_LEVELS,
+  READING_PASSAGE_TYPES,
+  type BucketAudience,
+  type EngLevel,
+  type ReadingPassageType
+} from './questionTypes';
 import englishCronJobTrackingService, {
   normalizeError,
   type EnglishCronRunRef
@@ -25,10 +34,8 @@ export const READING_REFILL_CHILD_QUEUE = 'english-reading-refill-child';
 
 const LOG_TAG = 'ReadingRefill';
 
-// Bucket reading 3 chiều (cefrLevel × topic × type) — không có quizType/optionCount như pool.
-export function readingBucketKeyOf(input: { cefrLevel: string; topicId: number | null; type: string }): string {
-  return `${input.cefrLevel}:${input.topicId ?? 'null'}:${input.type}`;
-}
+// Bucket reading (cefrLevel × topic × type × beginner) — không có quizType/optionCount như pool.
+export { readingBucketKeyOf };
 
 // ─── Scan ─────────────────────────────────────────────────────────────────────
 
@@ -37,6 +44,7 @@ export interface ReadingBucketCandidate {
   topicId: number | null;
   topicName: string | null;
   type: ReadingPassageType;
+  forBeginner: boolean;
   currentCount: number;
   deficiency: number;
 }
@@ -45,6 +53,8 @@ export interface ReadingBucketFilter {
   cefrLevels?: EngLevel[];
   topicIds?: number[];
   types?: ReadingPassageType[];
+  // undefined = cả bucket thường lẫn bucket beginner.
+  audience?: BucketAudience;
 }
 
 export interface ScanReadingBucketsOptions {
@@ -68,7 +78,8 @@ export function isReadingBucketDeficient(
 }
 
 /**
- * Quét toàn bộ bucket (topic × cefrLevel × type), sắp xếp giống scanBuckets của pool:
+ * Quét toàn bộ bucket (topic × cefrLevel × type), cộng bucket beginner (topic bật forBeginner
+ * × A1–B1 × chỉ 'daily'). Sắp xếp giống scanBuckets của pool:
  * deficiency giảm dần → lần refill thành công gần nhất tăng dần (null trước) → bucketKey.
  * Tiêu chí (2) là phần chống đói: khi 1 lần chạy bị budget-cap giữa chừng, bucket đứng
  * sau trong thứ tự cố định sẽ không bị bỏ quên mãi.
@@ -84,25 +95,43 @@ export async function scanReadingBuckets(options: ScanReadingBucketsOptions): Pr
   const typeFilter = hasFilterValues(filter?.types) ? new Set(filter.types) : null;
   const bucketKeyFilter = hasFilterValues(options.bucketKeys) ? new Set(options.bucketKeys) : null;
 
-  const all: ReadingBucketCandidate[] = [];
-  for (const topic of topics) {
-    if (topicIdFilter && !topicIdFilter.has(topic.id)) continue;
-    for (const cefrLevel of ENG_LEVELS) {
-      if (cefrLevelFilter && !cefrLevelFilter.has(cefrLevel)) continue;
-      for (const type of READING_PASSAGE_TYPES) {
-        if (typeFilter && !typeFilter.has(type)) continue;
-        const bucketKey = readingBucketKeyOf({ cefrLevel, topicId: topic.id, type });
-        if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
+  const audiences: { forBeginner: boolean; cefrLevels: readonly EngLevel[]; types: readonly ReadingPassageType[] }[] =
+    [];
+  if (filter?.audience !== 'beginner') {
+    audiences.push({ forBeginner: false, cefrLevels: ENG_LEVELS, types: READING_PASSAGE_TYPES });
+  }
+  if (filter?.audience !== 'standard') {
+    audiences.push({ forBeginner: true, cefrLevels: BEGINNER_ENG_LEVELS, types: [BEGINNER_READING_PASSAGE_TYPE] });
+  }
 
-        const currentCount = countsByBucket.get(bucketKey) ?? 0;
-        all.push({
-          cefrLevel,
-          topicId: topic.id,
-          topicName: topic.name,
-          type,
-          currentCount,
-          deficiency: maxPerBucket - currentCount
-        });
+  const all: ReadingBucketCandidate[] = [];
+  for (const audience of audiences) {
+    for (const topic of topics) {
+      if (topicIdFilter && !topicIdFilter.has(topic.id)) continue;
+      if (audience.forBeginner && !topic.forBeginner) continue;
+      for (const cefrLevel of audience.cefrLevels) {
+        if (cefrLevelFilter && !cefrLevelFilter.has(cefrLevel)) continue;
+        for (const type of audience.types) {
+          if (typeFilter && !typeFilter.has(type)) continue;
+          const bucketKey = readingBucketKeyOf({
+            cefrLevel,
+            topicId: topic.id,
+            type,
+            forBeginner: audience.forBeginner
+          });
+          if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
+
+          const currentCount = countsByBucket.get(bucketKey) ?? 0;
+          all.push({
+            cefrLevel,
+            topicId: topic.id,
+            topicName: topic.name,
+            type,
+            forBeginner: audience.forBeginner,
+            currentCount,
+            deficiency: maxPerBucket - currentCount
+          });
+        }
       }
     }
   }
@@ -135,6 +164,7 @@ function toReadingGenJobData(item: ReadingRefillPlanItem, trackingRunId?: string
     topicId: item.topicId,
     topicName: item.topicName,
     type: item.type,
+    forBeginner: item.forBeginner,
     count: item.count,
     trackingRunId
   };
@@ -146,7 +176,7 @@ async function executeScheduledPlanAsFlow(
   trackingRun: EnglishCronRunRef | null
 ): Promise<void> {
   const children = plan.planned.map((item) => ({
-    name: `reading-${item.cefrLevel}-${item.topicId ?? 'null'}-${item.type}`,
+    name: `reading-${item.cefrLevel}-${item.topicId ?? 'null'}-${item.type}${item.forBeginner ? '-beginner' : ''}`,
     queueName: READING_REFILL_CHILD_QUEUE,
     data: toReadingGenJobData(item, trackingRun?.runId),
     opts: { removeOnComplete: true, removeOnFail: 50 }
@@ -195,6 +225,7 @@ async function executeManualPlanInProcess(
         topicId: item.topicId,
         topicName: item.topicName,
         type: item.type,
+        forBeginner: item.forBeginner,
         count: item.count,
         model: picked.model,
         provider: picked.provider,

@@ -48,6 +48,8 @@ export const englishTopic = pgTable('english_topics', {
   displayName: text(),
   description: text(),
   isActive: boolean().default(true).notNull(),
+  // Topic được dùng để sinh/phục vụ nội dung beginner (xem docs/beginner.md).
+  forBeginner: boolean().default(false).notNull(),
   createdAt: timestamp().defaultNow(),
   updatedAt: timestamp().defaultNow()
 });
@@ -75,6 +77,9 @@ export const englishQuestionPool = pgTable(
     // pool khác, trỏ về câu gốc. NULL = câu sinh mới bình thường. Xem docs/sibling-question.md.
     // Câu sibling vẫn là câu pool bình thường (pop/count/refill không đổi) — đây chỉ là thuộc tính.
     sourceQuestionId: integer().references((): AnyPgColumn => englishQuestionPool.id, { onDelete: 'set null' }),
+    // Câu sinh bằng prompt beginner (≤ B1, ≤ 4 đáp án). Là một chiều của bucket: câu beginner
+    // và câu thường không bao giờ trộn khi pop/count/refill. Xem docs/beginner.md.
+    forBeginner: boolean().default(false).notNull(),
     createdAt: timestamp().defaultNow(),
     // Set khi admin approve một AI review ghi đè questionData (xem englishQuestionPoolReview).
     updatedAt: timestamp().defaultNow()
@@ -82,7 +87,7 @@ export const englishQuestionPool = pgTable(
   (table) => [
     // Bucket (engLevel, quizType, topicId) là truy vấn nóng nhất: count/pop/refill và
     // filter ở admin UI đều đi qua tổ hợp này.
-    index('idx_question_pool_bucket').on(table.engLevel, table.quizType, table.topicId),
+    index('idx_question_pool_bucket').on(table.engLevel, table.quizType, table.topicId, table.forBeginner),
     index('idx_question_pool_created_at').on(table.createdAt),
     index('idx_question_pool_source').on(table.sourceQuestionId)
   ]
@@ -145,6 +150,7 @@ export const englishQuestionPoolReview = pgTable(
     optionCount: integer().notNull(),
     topicId: integer().references(() => englishTopic.id),
     topicName: text(),
+    forBeginner: boolean().default(false).notNull(),
 
     // Ghi chú admin gửi kèm khi request review — chèn vào prompt làm hướng soi riêng.
     adminNote: text(),
@@ -205,6 +211,8 @@ export const englishReadingPassage = pgTable(
     topicName: text(),
     // 'daily' (mặc định, narrative) | 'academic' (expository) — xem READING_PASSAGE_TYPES.
     type: text().default('daily').notNull(),
+    // Bài sinh bằng prompt beginner — chiều thứ 4 của bucket, xem docs/beginner.md.
+    forBeginner: boolean().default(false).notNull(),
     model: text().notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
@@ -217,7 +225,7 @@ export const englishReadingPassage = pgTable(
     updatedAt: timestamp().defaultNow()
   },
   (t) => [
-    index('idx_reading_passages_bucket').on(t.cefrLevel, t.topicId, t.type),
+    index('idx_reading_passages_bucket').on(t.cefrLevel, t.topicId, t.type, t.forBeginner),
     index('idx_reading_passages_created_at').on(t.createdAt)
   ]
 );
@@ -251,6 +259,8 @@ export const englishReadingQuestion = pgTable(
     topicName: text(),
     // Snapshot từ passage.type — xem englishReadingPassage.type.
     type: text().default('daily').notNull(),
+    // Snapshot từ passage.forBeginner.
+    forBeginner: boolean().default(false).notNull(),
     model: text().notNull(),
     tokenIn: integer().default(0).notNull(),
     tokenOut: integer().default(0).notNull(),
@@ -260,7 +270,7 @@ export const englishReadingQuestion = pgTable(
   },
   (t) => [
     index('idx_reading_questions_passage').on(t.passageRefId),
-    index('idx_reading_questions_bucket').on(t.cefrLevel, t.topicId, t.type),
+    index('idx_reading_questions_bucket').on(t.cefrLevel, t.topicId, t.type, t.forBeginner),
     index('idx_reading_questions_created_at').on(t.createdAt)
   ]
 );

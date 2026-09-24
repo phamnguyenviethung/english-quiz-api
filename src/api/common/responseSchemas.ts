@@ -5,6 +5,7 @@ import { ProviderPreferencesSchema, QuizTypeSchema } from './schemas';
 import {
   QuestionPoolSchema,
   QuizDistributionSchema,
+  BeginnerQuizTypesSchema,
   JobFlagsSchema,
   PoolRefillScheduleSchema,
   ReadingPassageSchema as ReadingPassageConfigSchema,
@@ -123,12 +124,16 @@ export const ModelPricingSyncResultSchema = t.Object({
 
 // ── Pool bucket preview ───────────────────────────────────────────────────────
 export const PoolBucketSchema = t.Object({
-  bucketKey: t.String({ description: '`{engLevel}:{topicId|null}:{quizType}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  bucketKey: t.String({
+    description:
+      '`{engLevel}:{topicId|null}:{quizType}` (bucket beginner thêm hậu tố `:beginner`) — id ổn định để chọn/bỏ chọn bucket.'
+  }),
   engLevel: t.String(),
   quizType: t.String(),
   optionCount: t.Number(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  forBeginner: t.Boolean({ description: 'true = nội dung beginner (≤ B1, ≤ 4 đáp án) — xem docs/beginner.md.' }),
   currentCount: t.Number({ description: 'Số câu đang có trong bucket.' }),
   deficiency: t.Number({ description: 'question_pool.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
   plannedCount: t.Number({ description: 'Số câu sẽ sinh cho bucket này. 0 = bị scope bỏ qua.' })
@@ -183,6 +188,7 @@ export const EnglishTopicSchema = t.Object({
   displayName: t.Nullable(t.String()),
   description: t.Nullable(t.String()),
   isActive: t.Boolean(),
+  forBeginner: t.Boolean({ description: 'Topic được dùng cho nội dung beginner.' }),
   createdAt: t.Nullable(DateTimeSchema),
   updatedAt: t.Nullable(DateTimeSchema)
 });
@@ -202,7 +208,8 @@ export const PoolQuestionSchema = t.Object({
   topicId: t.Nullable(t.Number()),
   sourceQuestionId: t.Nullable(
     t.Number({ description: 'ID câu pool gốc nếu đây là câu tương tự (sibling). null = câu sinh mới thường.' })
-  )
+  ),
+  forBeginner: t.Boolean({ description: 'true = câu thuộc bucket beginner (≤ B1, ≤ 4 đáp án).' })
 });
 
 // Row của list endpoint — thêm engLevel/topicName/createdAt so với PoolQuestionSchema
@@ -276,6 +283,7 @@ export const PoolReviewListItemSchema = t.Object({
   optionCount: t.Number(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  forBeginner: t.Boolean({ description: 'true = nội dung beginner (≤ B1, ≤ 4 đáp án) — xem docs/beginner.md.' }),
   adminNote: t.Nullable(t.String({ description: 'Ghi chú admin gửi kèm khi request review.' })),
   verdict: t.Nullable(t.String({ description: "'pass' | 'revised' | 'reject'." })),
   summary: t.Nullable(t.String()),
@@ -369,12 +377,16 @@ export const SiblingSupportedTypeSchema = t.Object({
 
 // Preview cho manual bulk sibling refill (GET /admin/pool/siblings/buckets).
 export const PoolSiblingBucketSchema = t.Object({
-  bucketKey: t.String({ description: '`{engLevel}:{topicId|null}:{quizType}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  bucketKey: t.String({
+    description:
+      '`{engLevel}:{topicId|null}:{quizType}` (bucket beginner thêm hậu tố `:beginner`) — id ổn định để chọn/bỏ chọn bucket.'
+  }),
   engLevel: t.String(),
   quizType: t.String(),
   optionCount: t.Number(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
+  forBeginner: t.Boolean({ description: 'true = nội dung beginner (≤ B1, ≤ 4 đáp án) — xem docs/beginner.md.' }),
   currentCount: t.Number({ description: 'Số câu đang có trong bucket.' }),
   deficiency: t.Number({ description: 'question_pool.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
   sourceCount: t.Number({ description: 'Số câu gốc (sourceQuestionId IS NULL) dùng làm nguồn sinh sibling.' }),
@@ -403,6 +415,7 @@ export const ReadingPassageSchema = t.Object({
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
   type: t.String({ description: 'daily | academic — xem READING_PASSAGE_TYPES.' }),
+  forBeginner: t.Boolean({ description: 'true = nội dung beginner (≤ B1, ≤ 4 đáp án) — xem docs/beginner.md.' }),
   model: t.String(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
@@ -438,11 +451,15 @@ export const GeneratedReadingPassageSchema = t.Object({
 });
 
 export const ReadingBucketSchema = t.Object({
-  bucketKey: t.String({ description: '`{cefrLevel}:{topicId|null}:{type}` — id ổn định để chọn/bỏ chọn bucket.' }),
+  bucketKey: t.String({
+    description:
+      '`{cefrLevel}:{topicId|null}:{type}` (bucket beginner thêm hậu tố `:beginner`) — id ổn định để chọn/bỏ chọn bucket.'
+  }),
   cefrLevel: t.String(),
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
   type: t.String({ description: 'daily | academic.' }),
+  forBeginner: t.Boolean({ description: 'true = nội dung beginner (≤ B1, ≤ 4 đáp án) — xem docs/beginner.md.' }),
   currentCount: t.Number({ description: 'Số bài đang active trong bucket.' }),
   deficiency: t.Number({ description: 'reading_passage.maxPerBucket - currentCount (có thể âm nếu đang dư).' }),
   plannedCount: t.Number({ description: 'Số bài sẽ sinh cho bucket này. 0 = bị scope bỏ qua.' })
@@ -473,6 +490,7 @@ export const ReadingQuestionRecordSchema = t.Object({
   topicId: t.Nullable(t.Number()),
   topicName: t.Nullable(t.String()),
   type: t.String({ description: 'daily | academic — snapshot từ passage lúc sinh câu hỏi.' }),
+  forBeginner: t.Boolean({ description: 'Snapshot từ passage.forBeginner.' }),
   model: t.String(),
   tokenIn: t.Number(),
   tokenOut: t.Number(),
@@ -546,7 +564,8 @@ export const ReadingWithQuestionsSchema = t.Object({
     cefrLevel: t.String(),
     topicId: t.Nullable(t.Number()),
     topicName: t.Nullable(t.String()),
-    type: t.String({ description: 'daily | academic.' })
+    type: t.String({ description: 'daily | academic.' }),
+    forBeginner: t.Boolean()
   }),
   questions: t.Array(ReadingQuestionRecordSchema)
 });
@@ -556,6 +575,7 @@ export const ReadingWithQuestionsSchema = t.Object({
 export const EnglishConfigSnapshotSchema = z.object({
   question_pool: QuestionPoolSchema,
   quiz_distribution: QuizDistributionSchema,
+  beginner_quiz_types: BeginnerQuizTypesSchema,
   job_flags: JobFlagsSchema,
   pool_refill_schedule: PoolRefillScheduleSchema,
   reading_passage: ReadingPassageConfigSchema,

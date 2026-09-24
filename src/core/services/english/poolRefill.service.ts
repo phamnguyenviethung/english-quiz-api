@@ -4,9 +4,14 @@ import logger from '@/configs/logger.config';
 import { runWithConcurrency } from '@/utils/concurrency';
 import type { ResolvedStudyModel } from '@/configs/aiClient.config';
 import { fillBucketDetailed, getQuestionGenQueue, type QuestionGenJobData } from '@/core/cron/question-gen.job';
-import questionPoolService, { getMaxPoolSize, getPerBucketGenerationCap } from './questionPool.service';
+import questionPoolService, {
+  bucketKeyOf,
+  getBeginnerQuizTypes,
+  getMaxPoolSize,
+  getPerBucketGenerationCap
+} from './questionPool.service';
 import topicService from './topic.service';
-import type { QuizType } from './questionTypes';
+import { BEGINNER_ENG_LEVELS, BEGINNER_MAX_OPTION_COUNT, type BucketAudience, type QuizType } from './questionTypes';
 import type { DifficultyContext } from './study.service';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
 import englishCronJobTrackingService, {
@@ -24,7 +29,8 @@ const LOG_TAG = 'PoolRefill';
 
 const ENG_LEVELS: DifficultyContext['engLevel'][] = ['A1', 'A2', 'B1', 'B2'];
 
-function getOptionCount(engLevel: DifficultyContext['engLevel']): 4 | 5 {
+function getOptionCount(engLevel: DifficultyContext['engLevel'], forBeginner = false): 4 | 5 {
+  if (forBeginner) return BEGINNER_MAX_OPTION_COUNT;
   return engLevel === 'A1' || engLevel === 'A2' ? 4 : 5;
 }
 
@@ -34,9 +40,7 @@ function getEnabledQuizTypes(): QuizType[] {
     .map((item) => item.quizType as QuizType);
 }
 
-export function bucketKeyOf(input: { engLevel: string; topicId: number | null; quizType: string }): string {
-  return `${input.engLevel}:${input.topicId ?? 'null'}:${input.quizType}`;
-}
+export { bucketKeyOf };
 
 // ─── Scan ─────────────────────────────────────────────────────────────────────
 
@@ -46,6 +50,7 @@ export interface RefillBucketCandidate {
   optionCount: 4 | 5;
   topicId: number | null;
   topicName: string | null;
+  forBeginner: boolean;
   currentCount: number;
   deficiency: number;
 }
@@ -55,6 +60,8 @@ export interface BucketFilter {
   engLevels?: DifficultyContext['engLevel'][];
   topicIds?: number[];
   quizTypes?: QuizType[];
+  // undefined = cả bucket thường lẫn bucket beginner.
+  audience?: BucketAudience;
 }
 
 export interface ScanBucketsOptions {
@@ -85,7 +92,8 @@ export function isBucketDeficient(
 }
 
 /**
- * Quét toàn bộ bucket (topic × engLevel × quizType), sắp xếp theo:
+ * Quét toàn bộ bucket (topic × engLevel × quizType), cộng thêm bucket beginner (chỉ topic
+ * bật forBeginner × A1–B1 × loại câu beginner, luôn 4 đáp án). Sắp xếp theo:
  * 1. deficiency giảm dần (bucket thiếu nhiều nhất trước)
  * 2. lần refill thành công gần nhất tăng dần, null trước (bucket chưa từng được đụng tới ưu tiên)
  * 3. bucketKey tăng dần (tie-break xác định)
@@ -98,7 +106,6 @@ export function isBucketDeficient(
 export async function scanBuckets(options: ScanBucketsOptions): Promise<RefillBucketCandidate[]> {
   const topics = await topicService.getAllActiveTopics();
   const maxPool = getMaxPoolSize();
-  const quizTypes = getEnabledQuizTypes();
   const countsByBucket = await questionPoolService.getPoolCountsByBucket();
 
   const filter = options.filter;
@@ -107,26 +114,42 @@ export async function scanBuckets(options: ScanBucketsOptions): Promise<RefillBu
   const quizTypeFilter = hasFilterValues(filter?.quizTypes) ? new Set(filter.quizTypes) : null;
   const bucketKeyFilter = hasFilterValues(options.bucketKeys) ? new Set(options.bucketKeys) : null;
 
-  const all: RefillBucketCandidate[] = [];
-  for (const topic of topics) {
-    if (topicIdFilter && !topicIdFilter.has(topic.id)) continue;
-    for (const engLevel of ENG_LEVELS) {
-      if (engLevelFilter && !engLevelFilter.has(engLevel)) continue;
-      for (const quizType of quizTypes) {
-        if (quizTypeFilter && !quizTypeFilter.has(quizType)) continue;
-        const bucketKey = bucketKeyOf({ engLevel, topicId: topic.id, quizType });
-        if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
+  const audiences: {
+    forBeginner: boolean;
+    engLevels: readonly DifficultyContext['engLevel'][];
+    quizTypes: QuizType[];
+  }[] = [];
+  if (filter?.audience !== 'beginner') {
+    audiences.push({ forBeginner: false, engLevels: ENG_LEVELS, quizTypes: getEnabledQuizTypes() });
+  }
+  if (filter?.audience !== 'standard') {
+    audiences.push({ forBeginner: true, engLevels: BEGINNER_ENG_LEVELS, quizTypes: getBeginnerQuizTypes() });
+  }
 
-        const currentCount = countsByBucket.get(bucketKey) ?? 0;
-        all.push({
-          engLevel,
-          quizType,
-          optionCount: getOptionCount(engLevel),
-          topicId: topic.id,
-          topicName: topic.name,
-          currentCount,
-          deficiency: maxPool - currentCount
-        });
+  const all: RefillBucketCandidate[] = [];
+  for (const audience of audiences) {
+    for (const topic of topics) {
+      if (topicIdFilter && !topicIdFilter.has(topic.id)) continue;
+      if (audience.forBeginner && !topic.forBeginner) continue;
+      for (const engLevel of audience.engLevels) {
+        if (engLevelFilter && !engLevelFilter.has(engLevel)) continue;
+        for (const quizType of audience.quizTypes) {
+          if (quizTypeFilter && !quizTypeFilter.has(quizType)) continue;
+          const bucketKey = bucketKeyOf({ engLevel, topicId: topic.id, quizType, forBeginner: audience.forBeginner });
+          if (bucketKeyFilter && !bucketKeyFilter.has(bucketKey)) continue;
+
+          const currentCount = countsByBucket.get(bucketKey) ?? 0;
+          all.push({
+            engLevel,
+            quizType,
+            optionCount: getOptionCount(engLevel, audience.forBeginner),
+            topicId: topic.id,
+            topicName: topic.name,
+            forBeginner: audience.forBeginner,
+            currentCount,
+            deficiency: maxPool - currentCount
+          });
+        }
       }
     }
   }
@@ -210,6 +233,7 @@ function toQuestionGenJobData(item: RefillPlanItem, trackingRunId?: string): Que
     optionCount: item.optionCount,
     topicId: item.topicId,
     topicName: item.topicName,
+    forBeginner: item.forBeginner,
     count: item.count,
     trackingRunId
   };
@@ -221,7 +245,7 @@ async function executeScheduledPlanAsFlow(
   trackingRun: EnglishCronRunRef | null
 ): Promise<void> {
   const children = plan.planned.map((item) => ({
-    name: `fill-${item.engLevel}-${item.topicId ?? 'null'}-${item.quizType}`,
+    name: `fill-${item.engLevel}-${item.topicId ?? 'null'}-${item.quizType}${item.forBeginner ? '-beginner' : ''}`,
     queueName: POOL_REFILL_CHILD_QUEUE,
     data: toQuestionGenJobData(item, trackingRun?.runId),
     opts: { removeOnComplete: true, removeOnFail: 50 }
@@ -272,6 +296,7 @@ async function executeManualPlanInProcess(
         optionCount: item.optionCount,
         topicId: item.topicId,
         topicName: item.topicName,
+        forBeginner: item.forBeginner,
         count: item.count,
         model: picked.model,
         provider: picked.provider,
@@ -293,7 +318,7 @@ async function executeManualPlanInProcess(
         failed++;
         const normalized = normalizeError(result.reason);
         logger.error(
-          `[${LOG_TAG}] Manual bucket failed runId=${runKey} engLevel=${item.engLevel} topicId=${item.topicId} quizType=${item.quizType}: ${normalized.message}`
+          `[${LOG_TAG}] Manual bucket failed runId=${runKey} engLevel=${item.engLevel} topicId=${item.topicId} quizType=${item.quizType} forBeginner=${item.forBeginner}: ${normalized.message}`
         );
       }
     }
@@ -372,6 +397,7 @@ export interface OnDemandRefillInput {
   topicName: string | null;
   quizType: QuizType;
   optionCount: 4 | 5;
+  forBeginner?: boolean;
 }
 
 /**
@@ -392,9 +418,14 @@ export function buildOnDemandRefillJob(
       optionCount: input.optionCount,
       topicId: input.topicId,
       topicName: input.topicName,
+      forBeginner: input.forBeginner ?? false,
       count: needed
     },
-    opts: { deduplication: { id: `refill_${input.engLevel}_${input.topicId ?? 'null'}_${input.quizType}` } }
+    opts: {
+      deduplication: {
+        id: `refill_${input.engLevel}_${input.topicId ?? 'null'}_${input.quizType}${input.forBeginner ? '_beginner' : ''}`
+      }
+    }
   };
 }
 
@@ -408,13 +439,18 @@ export async function runOnDemandRefill(input: OnDemandRefillInput): Promise<{ e
       return { enqueued: false };
     }
 
-    const currentCount = await questionPoolService.getPoolCount(input.engLevel, input.quizType, input.topicId);
+    const currentCount = await questionPoolService.getPoolCount(
+      input.engLevel,
+      input.quizType,
+      input.topicId,
+      input.forBeginner ?? false
+    );
     const threshold = questionPoolService.getRefillThreshold();
     if (currentCount >= threshold) return { enqueued: false };
 
     const needed = getMaxPoolSize() - currentCount;
     logger.info(
-      `[${LOG_TAG}] Pool low (${currentCount}/${threshold}) for engLevel=${input.engLevel} topicId=${input.topicId} quizType=${input.quizType}, adding refill job count=${needed}`
+      `[${LOG_TAG}] Pool low (${currentCount}/${threshold}) for engLevel=${input.engLevel} topicId=${input.topicId} quizType=${input.quizType} forBeginner=${input.forBeginner ?? false}, adding refill job count=${needed}`
     );
 
     const job = buildOnDemandRefillJob(input, needed);

@@ -4,7 +4,7 @@ import logger from '@/configs/logger.config';
 import redisClient from '@/configs/redis.config';
 import { getEnglishConfigSnapshot, onEnglishConfigChanged } from '@/core/services/english/englishConfig.service';
 import englishCronJobTrackingService from '@/core/services/english/englishCronJobTracking.service';
-import { scanBuckets, type RefillBucketCandidate } from '@/core/services/english/poolRefill.service';
+import { bucketKeyOf, scanBuckets, type RefillBucketCandidate } from '@/core/services/english/poolRefill.service';
 import { processSiblingBucket } from '@/core/services/english/siblingRefill.service';
 import { SIBLING_SUPPORTED_QUIZ_TYPES } from '@/core/services/english/questionTypes';
 import type { QuizType } from '@/core/services/english/questionTypes';
@@ -38,7 +38,7 @@ export async function reconcileSiblingGenSchedulers(): Promise<void> {
 }
 
 function lockKeyOf(c: RefillBucketCandidate): string {
-  return `question-pool:lock:${c.engLevel}:${c.topicId ?? 'null'}:${c.quizType}`;
+  return `question-pool:lock:${bucketKeyOf(c)}`;
 }
 
 async function runSiblingGen(trigger: { bullJobId: string; bullJobName: string }): Promise<void> {

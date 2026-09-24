@@ -1,8 +1,9 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import _ from 'lodash';
 import db from '@/configs/orm.config';
 import logger from '@/configs/logger.config';
 import { englishTopic, type EnglishTopic, type InsertEnglishTopic } from '@/core/db/schema/main';
+import { NotFoundException } from '@/core/exceptions';
 
 async function getAllActiveTopics(): Promise<EnglishTopic[]> {
   return db.select().from(englishTopic).where(eq(englishTopic.isActive, true));
@@ -13,24 +14,37 @@ async function getTopicById(id: number): Promise<EnglishTopic | null> {
   return topic ?? null;
 }
 
-async function createTopic(name: string, description?: string): Promise<EnglishTopic> {
-  const [created] = await db.insert(englishTopic).values({ name, description }).returning();
+async function getActiveBeginnerTopics(): Promise<EnglishTopic[]> {
+  return db
+    .select()
+    .from(englishTopic)
+    .where(and(eq(englishTopic.isActive, true), eq(englishTopic.forBeginner, true)));
+}
+
+async function createTopic(name: string, description?: string, forBeginner = false): Promise<EnglishTopic> {
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx.insert(englishTopic).values({ name, description, forBeginner }).returning();
+    return row;
+  });
   if (!created) throw new Error(`[TopicService] Failed to create topic: ${name}`);
-  logger.info(`[TopicService] Created topic id=${created.id} name="${name}"`);
+  logger.info(`[TopicService] Created topic id=${created.id} name="${name}" forBeginner=${forBeginner}`);
   return created;
 }
 
 async function updateTopic(
   id: number,
-  data: Partial<Pick<InsertEnglishTopic, 'name' | 'displayName' | 'description' | 'isActive'>>
+  data: Partial<Pick<InsertEnglishTopic, 'name' | 'displayName' | 'description' | 'isActive' | 'forBeginner'>>
 ): Promise<EnglishTopic> {
-  const [updated] = await db
-    .update(englishTopic)
-    .set({ ...data, updatedAt: new Date() })
-    .where(eq(englishTopic.id, id))
-    .returning();
-  if (!updated) throw new Error(`[TopicService] Topic not found: ${id}`);
-  logger.info(`[TopicService] Updated topic id=${id}`);
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(englishTopic)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(englishTopic.id, id))
+      .returning();
+    return row;
+  });
+  if (!updated) throw new NotFoundException(`Không tìm thấy topic: ${id}`);
+  logger.info(`[TopicService] Updated topic id=${id} fields=${Object.keys(data).join(',')}`);
   return updated;
 }
 
@@ -99,6 +113,7 @@ async function getRandomTopicPairs(
 
 export default {
   getAllActiveTopics,
+  getActiveBeginnerTopics,
   getTopicById,
   createTopic,
   updateTopic,

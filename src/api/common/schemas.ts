@@ -33,6 +33,19 @@ export const OptionCountSchema = t.Union([t.Literal(3), t.Literal(4), t.Literal(
 // optionCount cho pool fill chỉ nhận 4 hoặc 5 (khớp questionPoolTrigger.ensurePoolFilled).
 export const PoolOptionCountSchema = t.Union([t.Literal(4), t.Literal(5)]);
 
+// Query `beginner=true` ở các endpoint phục vụ tenant: chỉ lấy nội dung beginner (≤ B1, ≤ 4 đáp án).
+// Bỏ trống/false = chỉ nội dung thường — hai luồng không bao giờ trộn. Xem docs/beginner.md.
+export const BeginnerQuerySchema = t.Optional(
+  t.BooleanString({
+    description: 'true = chỉ nội dung beginner (≤ B1, ≤ 4 đáp án). Bỏ trống/false = chỉ nội dung thường.'
+  })
+);
+
+// Filter bucket theo đối tượng ở các endpoint admin preview/refill. Bỏ trống = cả hai.
+export const BucketAudienceSchema = t.Union([t.Literal('standard'), t.Literal('beginner')], {
+  description: "'standard' = chỉ bucket thường, 'beginner' = chỉ bucket beginner. Bỏ trống = cả hai."
+});
+
 // Path param `:id` dạng số — t.Numeric() auto-coerce string→number và reject phi số → 400.
 export const IdParam = t.Object({ id: t.Numeric() });
 

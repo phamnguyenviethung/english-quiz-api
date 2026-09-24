@@ -48,6 +48,7 @@ function candidateFor(engLevel: string, currentCount: number, deficiency: number
     optionCount: 4,
     topicId,
     topicName: 'daily-life',
+    forBeginner: false,
     currentCount,
     deficiency
   };
@@ -316,7 +317,12 @@ describe('processSiblingBucket — chi phí theo model đã cấu hình', () => 
   }
 
   async function startRun() {
-    const run = await tracking.startRun({ jobKey: 'sibling_gen_manual', trigger: 'manual', totalBuckets: 1, deficientBuckets: 1 });
+    const run = await tracking.startRun({
+      jobKey: 'sibling_gen_manual',
+      trigger: 'manual',
+      totalBuckets: 1,
+      deficientBuckets: 1
+    });
     if (!run) throw new Error('không tạo được run');
     return run;
   }
@@ -348,7 +354,10 @@ describe('processSiblingBucket — chi phí theo model đã cấu hình', () => 
     await registerModel(PRICEY);
     await seedPoolQuestions(4, { engLevel: 'A1', quizType: 'vocab', topicId });
     for (let i = 0; i < 4; i += 1) {
-      mockLLM.enqueue({ questions: [sibling(i + 10)] }, { inputTokens: 1000, outputTokens: 500, model: 'stripped-name' });
+      mockLLM.enqueue(
+        { questions: [sibling(i + 10)] },
+        { inputTokens: 1000, outputTokens: 500, model: 'stripped-name' }
+      );
     }
     const run = await startRun();
 

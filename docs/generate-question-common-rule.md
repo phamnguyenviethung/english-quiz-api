@@ -195,6 +195,10 @@ Như vậy guideline chung (mục 5–6) là hợp đồng chất lượng cho c
 
 ---
 
-## 9. Sibling question (câu tương tự)
+## 9. Beginner mode
+
+Câu beginner (bucket `forBeginner`, ≤ B1, ≤ 4 đáp án) dùng **cùng base prompt** của loại quiz, nhưng khối cuối là `buildBeginnerInstruction` (`prompt/beginner-prompt.ts`) thay cho `buildDifficultyInstruction`: bỏ EXPERT LEARNER MODE, bỏ DOMAIN A–G / danh sách từ bị cấm, dùng từ vựng thường ngày theo wordlist + sách giáo khoa Cambridge, distractor khác nghĩa rõ ràng. Chọn khối qua `buildLevelInstruction(ctx, quizType)` ở `study.service.ts`. Chi tiết: [`beginner.md`](./beginner.md).
+
+## 10. Sibling question (câu tương tự)
 
 `prompt/sibling-prompt.ts` (`buildSiblingPrompt`) tái dùng **nguyên** hợp đồng chất lượng mục 5–6, thêm ràng buộc: **khóa nguyên văn** term cần học + độ khó (CEFR) + topic lấy từ một câu pool gốc thật; chỉ sinh mới ngữ cảnh / distractor / ví dụ / giải thích và bắt buộc khác rõ rệt so với câu gốc. Chỉ 9 quizType có term trung tâm được hỗ trợ. Chi tiết ở [`sibling-question.md`](./sibling-question.md).

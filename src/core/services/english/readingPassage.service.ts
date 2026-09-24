@@ -7,10 +7,16 @@ import {
   englishTopic,
   type InsertEnglishReadingPassage
 } from '@/core/db/schema/main';
-import { NotFoundException } from '@/core/exceptions';
+import { BusinessLogicException, NotFoundException } from '@/core/exceptions';
 import { countPassageWords } from './prompt/reading-passage-prompt';
 import { getEnglishConfigSnapshot } from './englishConfig.service';
-import type { EngLevel, ReadingPassageType } from './questionTypes';
+import {
+  BEGINNER_ENG_LEVELS,
+  BEGINNER_READING_PASSAGE_TYPE,
+  isBeginnerLevel,
+  type EngLevel,
+  type ReadingPassageType
+} from './questionTypes';
 
 export interface ReadingPassageRecord {
   id: number;
@@ -21,6 +27,7 @@ export interface ReadingPassageRecord {
   topicId: number | null;
   topicName: string | null;
   type: string;
+  forBeginner: boolean;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -47,6 +54,7 @@ export interface ListReadingPassagesInput {
   type?: string;
   model?: string;
   isActive?: boolean;
+  forBeginner?: boolean;
   createdFrom?: string;
   createdTo?: string;
   q?: string;
@@ -76,9 +84,24 @@ export interface InsertReadingPassageInput {
   topicId: number | null;
   topicName: string | null;
   type: ReadingPassageType;
+  forBeginner?: boolean;
   model: string;
   tokenIn: number;
   tokenOut: number;
+}
+
+/**
+ * Key bucket bài đọc = `${cefrLevel}:${topicId ?? 'null'}:${type}`, bài beginner thêm hậu tố
+ * `:beginner`. Mọi nơi đếm/scan/insert đi qua hàm này, không tự ghép chuỗi.
+ */
+export function readingBucketKeyOf(input: {
+  cefrLevel: string;
+  topicId: number | null;
+  type: string;
+  forBeginner?: boolean;
+}): string {
+  const base = `${input.cefrLevel}:${input.topicId ?? 'null'}:${input.type}`;
+  return input.forBeginner ? `${base}:beginner` : base;
 }
 
 export const LIST_PASSAGES_DEFAULT_PAGE_SIZE = 20;
@@ -105,6 +128,10 @@ function buildTopicCondition(topicId: number | null) {
   return topicId !== null ? eq(englishReadingPassage.topicId, topicId) : isNull(englishReadingPassage.topicId);
 }
 
+function buildBeginnerCondition(forBeginner: boolean) {
+  return eq(englishReadingPassage.forBeginner, forBeginner);
+}
+
 // drizzle ilike() không tự escape — giống questionPool.service, % và _ do người dùng gõ
 // phải escape thủ công nếu không sẽ hoạt động như wildcard SQL.
 function escapeLikePattern(value: string): string {
@@ -120,6 +147,7 @@ function mapRow(row: {
   topicId: number | null;
   topicName: string | null;
   type: string;
+  forBeginner: boolean;
   model: string;
   tokenIn: number;
   tokenOut: number;
@@ -131,9 +159,8 @@ function mapRow(row: {
 }
 
 /**
- * Count của MỌI bucket trong 1 query, key = `${cefrLevel}:${topicId ?? 'null'}:${type}`
- * (khớp readingBucketKeyOf ở readingRefill.service). Chỉ đếm bài đang active — bài đã
- * tắt không phục vụ được nên không tính là "đã có".
+ * Count của MỌI bucket trong 1 query, key theo readingBucketKeyOf. Chỉ đếm bài đang
+ * active — bài đã tắt không phục vụ được nên không tính là "đã có".
  */
 async function getCountsByBucket(): Promise<Map<string, number>> {
   const rows = await db
@@ -141,16 +168,22 @@ async function getCountsByBucket(): Promise<Map<string, number>> {
       cefrLevel: englishReadingPassage.cefrLevel,
       topicId: englishReadingPassage.topicId,
       type: englishReadingPassage.type,
+      forBeginner: englishReadingPassage.forBeginner,
       total: count()
     })
     .from(englishReadingPassage)
     .where(eq(englishReadingPassage.isActive, true))
-    .groupBy(englishReadingPassage.cefrLevel, englishReadingPassage.topicId, englishReadingPassage.type);
+    .groupBy(
+      englishReadingPassage.cefrLevel,
+      englishReadingPassage.topicId,
+      englishReadingPassage.type,
+      englishReadingPassage.forBeginner
+    );
 
-  return new Map(rows.map((row) => [`${row.cefrLevel}:${row.topicId ?? 'null'}:${row.type}`, row.total]));
+  return new Map(rows.map((row) => [readingBucketKeyOf(row), row.total]));
 }
 
-async function getCount(cefrLevel: string, topicId: number | null, type: string): Promise<number> {
+async function getCount(cefrLevel: string, topicId: number | null, type: string, forBeginner = false): Promise<number> {
   const [result] = await db
     .select({ total: count() })
     .from(englishReadingPassage)
@@ -159,6 +192,7 @@ async function getCount(cefrLevel: string, topicId: number | null, type: string)
         eq(englishReadingPassage.cefrLevel, cefrLevel),
         buildTopicCondition(topicId),
         eq(englishReadingPassage.type, type),
+        buildBeginnerCondition(forBeginner),
         eq(englishReadingPassage.isActive, true)
       )
     );
@@ -170,7 +204,8 @@ async function getRecentTitles(
   cefrLevel: string,
   topicId: number | null,
   type: string,
-  limit: number
+  limit: number,
+  forBeginner = false
 ): Promise<string[]> {
   if (limit <= 0) return [];
   const rows = await db
@@ -180,7 +215,8 @@ async function getRecentTitles(
       and(
         eq(englishReadingPassage.cefrLevel, cefrLevel),
         buildTopicCondition(topicId),
-        eq(englishReadingPassage.type, type)
+        eq(englishReadingPassage.type, type),
+        buildBeginnerCondition(forBeginner)
       )
     )
     .orderBy(desc(englishReadingPassage.id))
@@ -206,6 +242,7 @@ const SELECT_COLUMNS = {
   topicId: englishReadingPassage.topicId,
   topicName: englishReadingPassage.topicName,
   type: englishReadingPassage.type,
+  forBeginner: englishReadingPassage.forBeginner,
   model: englishReadingPassage.model,
   tokenIn: englishReadingPassage.tokenIn,
   tokenOut: englishReadingPassage.tokenOut,
@@ -230,6 +267,7 @@ async function listPassages(input: ListReadingPassagesInput): Promise<ReadingPas
   if (input.type) conditions.push(eq(englishReadingPassage.type, input.type));
   if (input.model) conditions.push(eq(englishReadingPassage.model, input.model));
   if (input.isActive !== undefined) conditions.push(eq(englishReadingPassage.isActive, input.isActive));
+  if (input.forBeginner !== undefined) conditions.push(buildBeginnerCondition(input.forBeginner));
   if (input.withoutTopic) conditions.push(buildTopicCondition(null));
   else if (input.topicId !== undefined) conditions.push(buildTopicCondition(input.topicId));
 
@@ -302,21 +340,20 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
   if (passages.length === 0) return 0;
 
   const inserted = await db.transaction(async (tx) => {
-    const bucketKeys = [...new Set(passages.map((p) => `${p.cefrLevel}:${p.topicId ?? 'null'}:${p.type}`))];
+    const bucketByKey = new Map(passages.map((p) => [readingBucketKeyOf(p), p]));
     const bucketCounts = new Map<string, number>();
     let insertedCount = 0;
 
-    for (const key of bucketKeys) {
-      const [cefrLevel, topicIdStr, type] = key.split(':');
-      const topicId = topicIdStr === 'null' ? null : Number(topicIdStr);
+    for (const [key, p] of bucketByKey) {
       const [result] = await tx
         .select({ total: count() })
         .from(englishReadingPassage)
         .where(
           and(
-            eq(englishReadingPassage.cefrLevel, cefrLevel!),
-            buildTopicCondition(topicId),
-            eq(englishReadingPassage.type, type!),
+            eq(englishReadingPassage.cefrLevel, p.cefrLevel),
+            buildTopicCondition(p.topicId),
+            eq(englishReadingPassage.type, p.type),
+            buildBeginnerCondition(p.forBeginner ?? false),
             eq(englishReadingPassage.isActive, true)
           )
         );
@@ -325,12 +362,12 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
 
     const maxPerBucket = getMaxPerBucket();
     for (const passage of passages) {
-      const key = `${passage.cefrLevel}:${passage.topicId ?? 'null'}:${passage.type}`;
+      const key = readingBucketKeyOf(passage);
       const currentCount = bucketCounts.get(key) ?? 0;
 
       if (currentCount >= maxPerBucket) {
         logger.info(
-          `[ReadingPassage] Bucket full (${currentCount}/${maxPerBucket}) for cefrLevel=${passage.cefrLevel} topicId=${passage.topicId} type=${passage.type}, skipping`
+          `[ReadingPassage] Bucket full (${currentCount}/${maxPerBucket}) for cefrLevel=${passage.cefrLevel} topicId=${passage.topicId} type=${passage.type} forBeginner=${passage.forBeginner ?? false}, skipping`
         );
         continue;
       }
@@ -343,6 +380,7 @@ async function insertPassages(passages: InsertReadingPassageInput[]): Promise<nu
         topicId: passage.topicId,
         topicName: passage.topicName,
         type: passage.type,
+        forBeginner: passage.forBeginner ?? false,
         model: passage.model,
         tokenIn: passage.tokenIn,
         tokenOut: passage.tokenOut
@@ -364,6 +402,7 @@ export interface UpdateReadingPassageInput {
   title?: string;
   paragraphs?: string[];
   isActive?: boolean;
+  forBeginner?: boolean;
 }
 
 /**
@@ -376,11 +415,36 @@ export interface UpdateReadingPassageInput {
 async function updatePassage(id: number, patch: UpdateReadingPassageInput): Promise<ReadingPassageRecord> {
   const updated = await db.transaction(async (tx) => {
     const [existing] = await tx
-      .select({ id: englishReadingPassage.id })
+      .select({
+        id: englishReadingPassage.id,
+        cefrLevel: englishReadingPassage.cefrLevel,
+        type: englishReadingPassage.type
+      })
       .from(englishReadingPassage)
       .where(eq(englishReadingPassage.id, id))
       .limit(1);
     if (!existing) throw new NotFoundException(`Không tìm thấy reading passage: ${id}`);
+
+    if (patch.forBeginner === true) {
+      if (!isBeginnerLevel(existing.cefrLevel)) {
+        throw new BusinessLogicException(
+          `Chỉ bài đọc level ${BEGINNER_ENG_LEVELS.join(', ')} mới được đánh dấu beginner (bài #${id} là ${existing.cefrLevel})`
+        );
+      }
+      if (existing.type !== BEGINNER_READING_PASSAGE_TYPE) {
+        throw new BusinessLogicException(
+          `Chỉ bài đọc type "${BEGINNER_READING_PASSAGE_TYPE}" mới được đánh dấu beginner (bài #${id} là ${existing.type})`
+        );
+      }
+    }
+
+    // Câu hỏi giữ snapshot forBeginner của bài — đổi cờ bài thì đổi luôn cờ câu hỏi.
+    if (patch.forBeginner !== undefined) {
+      await tx
+        .update(englishReadingQuestion)
+        .set({ forBeginner: patch.forBeginner, updatedAt: new Date() })
+        .where(eq(englishReadingQuestion.passageRefId, id));
+    }
 
     const paragraphs = patch.paragraphs?.map((paragraph) => paragraph.trim()).filter(Boolean);
 
@@ -401,6 +465,7 @@ async function updatePassage(id: number, patch: UpdateReadingPassageInput): Prom
         ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
         ...(paragraphs ? { paragraphs, wordCount: countPassageWords(paragraphs), questionGenAttempts: 0 } : {}),
         ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        ...(patch.forBeginner !== undefined ? { forBeginner: patch.forBeginner } : {}),
         updatedAt: new Date()
       })
       .where(eq(englishReadingPassage.id, id))
@@ -430,6 +495,7 @@ export interface QuestionGenCandidate {
   cefrLevel: string;
   topicId: number | null;
   topicName: string | null;
+  forBeginner: boolean;
   questionGenAttempts: number;
 }
 
@@ -438,6 +504,8 @@ export interface QuestionGenCandidateFilter {
   topicIds?: number[];
   passageIds?: number[];
   maxAttempts?: number;
+  // undefined = cả bài thường lẫn bài beginner.
+  forBeginner?: boolean;
 }
 
 /**
@@ -458,6 +526,7 @@ async function listQuestionGenCandidates(filter: QuestionGenCandidateFilter = {}
   if (filter.passageIds && filter.passageIds.length > 0) {
     conditions.push(inArray(englishReadingPassage.id, filter.passageIds));
   }
+  if (filter.forBeginner !== undefined) conditions.push(buildBeginnerCondition(filter.forBeginner));
 
   return db
     .select({
@@ -466,6 +535,7 @@ async function listQuestionGenCandidates(filter: QuestionGenCandidateFilter = {}
       cefrLevel: englishReadingPassage.cefrLevel,
       topicId: englishReadingPassage.topicId,
       topicName: englishReadingPassage.topicName,
+      forBeginner: englishReadingPassage.forBeginner,
       questionGenAttempts: englishReadingPassage.questionGenAttempts
     })
     .from(englishReadingPassage)

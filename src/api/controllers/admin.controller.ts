@@ -22,9 +22,12 @@ import readingQuestionService, {
   type UpdateReadingQuestionInput
 } from '@/core/services/english/readingQuestion.service';
 import {
+  BUCKET_AUDIENCES,
   ENG_LEVELS,
   QUIZ_TYPES,
   READING_PASSAGE_TYPES,
+  isBucketAudience,
+  type BucketAudience,
   type EngLevel,
   type QuizType,
   type ReadingPassageType
@@ -202,6 +205,7 @@ interface PoolBucketFilterInput {
   engLevels?: string[];
   topicIds?: number[];
   quizTypes?: string[];
+  audience?: string;
 }
 
 interface TriggerManualPoolRefillInput {
@@ -225,6 +229,14 @@ function parseCsvParam(value: string | undefined): string[] | undefined {
   return parts.length > 0 ? parts : undefined;
 }
 
+function toBucketAudience(value: string | undefined): BucketAudience | undefined {
+  if (value === undefined) return undefined;
+  if (!isBucketAudience(value)) {
+    throw new BusinessLogicException(`audience không hợp lệ: ${value} (chỉ nhận ${BUCKET_AUDIENCES.join(', ')})`);
+  }
+  return value;
+}
+
 function toBucketFilter(input: PoolBucketFilterInput | undefined): BucketFilter | undefined {
   if (!input) return undefined;
 
@@ -242,7 +254,8 @@ function toBucketFilter(input: PoolBucketFilterInput | undefined): BucketFilter 
   const filter: BucketFilter = {
     engLevels: input.engLevels as DifficultyContext['engLevel'][] | undefined,
     topicIds: input.topicIds,
-    quizTypes: input.quizTypes as QuizType[] | undefined
+    quizTypes: input.quizTypes as QuizType[] | undefined,
+    audience: toBucketAudience(input.audience)
   };
 
   const hasAny = Object.values(filter).some((values) => values !== undefined && values.length > 0);
@@ -253,6 +266,7 @@ interface ListPoolBucketsQuery {
   engLevels?: string;
   topicIds?: string;
   quizTypes?: string;
+  audience?: string;
   scope?: 'all' | 'deficient';
   countPerBucket?: number;
 }
@@ -266,7 +280,8 @@ async function listPoolBuckets(query: ListPoolBucketsQuery) {
   const filter = toBucketFilter({
     engLevels: parseCsvParam(query.engLevels),
     quizTypes: parseCsvParam(query.quizTypes),
-    topicIds
+    topicIds,
+    audience: query.audience
   });
 
   const { matched, plan } = await poolRefillService.buildManualRefillPlan({
@@ -287,6 +302,7 @@ async function listPoolBuckets(query: ListPoolBucketsQuery) {
       optionCount: candidate.optionCount,
       topicId: candidate.topicId,
       topicName: candidate.topicName,
+      forBeginner: candidate.forBeginner,
       currentCount: candidate.currentCount,
       deficiency: candidate.deficiency,
       plannedCount: plannedByKey.get(bucketKeyOf(candidate)) ?? 0
@@ -320,6 +336,11 @@ async function triggerManualPoolRefill(input: TriggerManualPoolRefillInput) {
     filter,
     bucketKeys: input.bucketKeys
   });
+}
+
+function setPoolQuestionForBeginner(id: number, forBeginner: boolean) {
+  logger.info(`[Admin] Set pool question id=${id} forBeginner=${forBeginner}`);
+  return questionPoolService.setQuestionForBeginner(id, forBeginner);
 }
 
 // ─── Pool AI review ─────────────────────────────────────────────────────────────
@@ -403,6 +424,7 @@ interface ListSiblingBucketsQuery {
   engLevels?: string;
   topicIds?: string;
   quizTypes?: string;
+  audience?: string;
   scope?: 'all' | 'deficient';
   sourcesPerBucket?: number;
   siblingsPerSource?: number;
@@ -413,7 +435,8 @@ async function listPoolSiblingBuckets(query: ListSiblingBucketsQuery) {
   const filter = toSiblingBucketFilter({
     engLevels: parseCsvParam(query.engLevels),
     quizTypes: parseCsvParam(query.quizTypes),
-    topicIds
+    topicIds,
+    audience: query.audience
   });
 
   const { matched, planned, totalPlannedSiblings } = await siblingRefillService.buildManualSiblingPlan({
@@ -431,6 +454,7 @@ async function listPoolSiblingBuckets(query: ListSiblingBucketsQuery) {
       optionCount: item.optionCount,
       topicId: item.topicId,
       topicName: item.topicName,
+      forBeginner: item.forBeginner,
       currentCount: item.currentCount,
       deficiency: item.deficiency,
       sourceCount: item.sourceCount,
@@ -485,6 +509,7 @@ interface ListReadingsQuery {
   type?: string;
   model?: string;
   isActive?: boolean;
+  forBeginner?: boolean;
   createdFrom?: string;
   createdTo?: string;
   q?: string;
@@ -507,6 +532,7 @@ interface UpdateReadingInput {
   title?: string;
   paragraphs?: string[];
   isActive?: boolean;
+  forBeginner?: boolean;
 }
 
 function updateReading(id: number, input: UpdateReadingInput) {
@@ -532,6 +558,7 @@ interface GenerateReadingPassageInput {
   cefrLevel: EngLevel;
   type: ReadingPassageType;
   model?: string;
+  forBeginner?: boolean;
 }
 
 /** Sinh thử 1 bài để admin xem prompt/model cho ra gì — KHÔNG lưu vào kho. */
@@ -543,10 +570,11 @@ async function generateReadingPassage(input: GenerateReadingPassageInput) {
     cefrLevel: input.cefrLevel,
     topicName,
     type: input.type,
-    model: input.model
+    model: input.model,
+    forBeginner: input.forBeginner
   });
   logger.info(
-    `[Admin] Generate reading passage preview cefrLevel=${ctx.cefrLevel} type=${ctx.type} topic="${topicName}"`
+    `[Admin] Generate reading passage preview cefrLevel=${ctx.cefrLevel} type=${ctx.type} forBeginner=${ctx.forBeginner} topic="${topicName}"`
   );
 
   const { passages, usage } = await studyService.generateReadingPassageBatch(ctx, { count: 1 });
@@ -563,6 +591,7 @@ interface ReadingBucketFilterInput {
   cefrLevels?: string[];
   topicIds?: number[];
   types?: string[];
+  audience?: string;
 }
 
 function toReadingBucketFilter(input: ReadingBucketFilterInput | undefined): ReadingBucketFilter | undefined {
@@ -581,7 +610,8 @@ function toReadingBucketFilter(input: ReadingBucketFilterInput | undefined): Rea
   const filter: ReadingBucketFilter = {
     cefrLevels: input.cefrLevels as EngLevel[] | undefined,
     topicIds: input.topicIds,
-    types: input.types as ReadingPassageType[] | undefined
+    types: input.types as ReadingPassageType[] | undefined,
+    audience: toBucketAudience(input.audience)
   };
 
   const hasAny = Object.values(filter).some((values) => values !== undefined && values.length > 0);
@@ -592,6 +622,7 @@ interface ListReadingBucketsQuery {
   cefrLevels?: string;
   topicIds?: string;
   types?: string;
+  audience?: string;
   scope?: 'all' | 'deficient';
   countPerBucket?: number;
 }
@@ -602,7 +633,8 @@ async function listReadingBuckets(query: ListReadingBucketsQuery) {
   const filter = toReadingBucketFilter({
     cefrLevels: parseCsvParam(query.cefrLevels),
     topicIds,
-    types: parseCsvParam(query.types)
+    types: parseCsvParam(query.types),
+    audience: query.audience
   });
 
   const { matched, plan } = await readingRefillService.buildManualReadingRefillPlan({
@@ -620,6 +652,7 @@ async function listReadingBuckets(query: ListReadingBucketsQuery) {
       topicId: candidate.topicId,
       topicName: candidate.topicName,
       type: candidate.type,
+      forBeginner: candidate.forBeginner,
       currentCount: candidate.currentCount,
       deficiency: candidate.deficiency,
       plannedCount: plannedByKey.get(readingBucketKeyOf(candidate)) ?? 0
@@ -671,6 +704,7 @@ interface ListReadingQuestionsQuery {
   quizType?: string;
   model?: string;
   isActive?: boolean;
+  forBeginner?: boolean;
   createdFrom?: string;
   createdTo?: string;
   q?: string;
@@ -873,6 +907,7 @@ export default {
   setQuizTypeAccess,
   listPoolBuckets,
   triggerManualPoolRefill,
+  setPoolQuestionForBeginner,
   enqueuePoolReviews,
   listPoolReviews,
   getPoolReview,

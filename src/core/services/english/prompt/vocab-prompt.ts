@@ -8,6 +8,8 @@ export interface DifficultyContext {
   // Provider routing của model đang dùng (lấy từ ai_models theo context schedule/manual).
   provider?: ProviderPreferencesJson;
   topicName?: string | null;
+  // Sinh theo prompt beginner (≤ B1, ≤ 4 đáp án) — xem prompt/beginner-prompt.ts.
+  forBeginner?: boolean;
 }
 
 export interface VocabQuestion {

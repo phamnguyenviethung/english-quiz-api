@@ -116,6 +116,14 @@ Record:
 
 Mỗi item có `quizType`, `weight`, `enabled`. Runtime filter `enabled=true` và `weight>0`, sau đó normalize theo tổng weight. Tổng weight không bắt buộc bằng 100.
 
+### `beginner_quiz_types`
+
+Record:
+
+- `beginner_quiz_types.items` (`arr`, category `questions`)
+
+Mỗi item có `quizType`, `enabled` — loại câu nào được sinh và phục vụ cho người mới học (bucket beginner, xem [`beginner.md`](./beginner.md)). Mỗi quizType chỉ được khai một lần. Default: bật mọi loại trừ `slang`, `idiom`. Loại beginner hiệu lực = bật ở đây **và** bật (weight > 0) ở `quiz_distribution` (`getBeginnerQuizTypes()`); `pickQuizType({ forBeginner: true })` bốc theo weight của `quiz_distribution` trong tập đó.
+
 ### `job_flags`
 
 Các record:

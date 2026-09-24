@@ -1,6 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { ok, created, list } from '@/api/common/response';
 import {
+  BucketAudienceSchema,
   EngLevelSchema,
   IdParam,
   ProviderPreferencesSchema,
@@ -17,6 +18,7 @@ import {
   CatalogModelSchema,
   ModelPricingSyncResultSchema,
   PoolBucketPreviewSchema,
+  PoolQuestionListItemSchema,
   PoolReviewListItemSchema,
   PoolReviewDetailSchema,
   PoolReviewPageSchema,
@@ -440,6 +442,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       engLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`. Bỏ trống = mọi trình độ.' })),
       topicIds: t.Optional(t.String({ description: 'CSV topic id, vd `3,7,12`. Bỏ trống = mọi topic đang bật.' })),
       quizTypes: t.Optional(t.String({ description: 'CSV quizType, vd `vocab,idiom`. Bỏ trống = mọi loại đang bật.' })),
+      audience: t.Optional(BucketAudienceSchema),
       scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
       countPerBucket: t.Optional(t.Numeric({ minimum: 1 }))
     }),
@@ -485,7 +488,8 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
           {
             engLevels: t.Optional(t.Array(EngLevelSchema)),
             topicIds: t.Optional(t.Array(t.Integer())),
-            quizTypes: t.Optional(t.Array(QuizTypeSchema))
+            quizTypes: t.Optional(t.Array(QuizTypeSchema)),
+            audience: t.Optional(BucketAudienceSchema)
           },
           { description: 'Thu hẹp không gian bucket. Chiều nào bỏ trống thì không lọc theo chiều đó.' }
         )
@@ -518,6 +522,31 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       ...COMMON_ERRORS
     }
   })
+  .patch(
+    '/pool/questions/:id',
+    async ({ params, body }) => ok(await adminController.setPoolQuestionForBeginner(params.id, body.forBeginner)),
+    {
+      params: IdParam,
+      body: t.Object({
+        forBeginner: t.Boolean({ description: 'true = chuyển câu sang bucket beginner, false = về bucket thường.' })
+      }),
+      detail: {
+        tags: ['Admin / Pool'],
+        summary: 'Mark a pool question for beginner',
+        description:
+          'Bật/tắt cờ beginner của 1 câu pool — câu chuyển bucket ngay lập tức. Chỉ câu level A1–B1, tối đa 4 ' +
+          'đáp án và thuộc loại câu đang bật cho beginner mới được đánh dấu (vi phạm trả 400). Câu không tồn ' +
+          `tại trả 404. ${ADMIN_AUTH_DESCRIPTION}`,
+        security: [{ bearerAuth: [] }]
+      },
+      response: {
+        200: ApiOk(PoolQuestionListItemSchema),
+        400: ApiErrorSchema,
+        404: ApiErrorSchema,
+        ...COMMON_ERRORS
+      }
+    }
+  )
 
   // ── Pool AI review ──────────────────────────────────────────────────────────
   .post('/pool/reviews', async ({ body, user }) => ok(await adminController.enqueuePoolReviews(body, user.id)), {
@@ -731,6 +760,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       quizTypes: t.Optional(
         t.String({ description: 'CSV quizType — chỉ trong 9 loại hỗ trợ sibling, loại khác trả 400.' })
       ),
+      audience: t.Optional(BucketAudienceSchema),
       scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
       sourcesPerBucket: t.Optional(t.Numeric({ minimum: 1 })),
       siblingsPerSource: t.Optional(t.Numeric({ minimum: 1, maximum: 5 }))
@@ -777,7 +807,8 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
         t.Object({
           engLevels: t.Optional(t.Array(EngLevelSchema)),
           topicIds: t.Optional(t.Array(t.Integer())),
-          quizTypes: t.Optional(t.Array(QuizTypeSchema))
+          quizTypes: t.Optional(t.Array(QuizTypeSchema)),
+          audience: t.Optional(BucketAudienceSchema)
         })
       ),
       bucketKeys: t.Optional(
@@ -812,6 +843,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       type: t.Optional(ReadingPassageTypeSchema),
       model: t.Optional(t.String()),
       isActive: t.Optional(t.BooleanString()),
+      forBeginner: t.Optional(t.BooleanString({ description: 'true = chỉ bài beginner, false = chỉ bài thường.' })),
       createdFrom: t.Optional(t.String({ format: 'date-time' })),
       createdTo: t.Optional(t.String({ format: 'date-time' })),
       q: t.Optional(t.String({ maxLength: 100 })),
@@ -862,6 +894,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       cefrLevels: t.Optional(t.String({ description: 'CSV, vd `A1,B2`. Bỏ trống = mọi trình độ.' })),
       topicIds: t.Optional(t.String({ description: 'CSV topic id, vd `3,7,12`. Bỏ trống = mọi topic đang bật.' })),
       types: t.Optional(t.String({ description: 'CSV, vd `daily,academic`. Bỏ trống = cả 2 type.' })),
+      audience: t.Optional(BucketAudienceSchema),
       scope: t.Optional(t.Union([t.Literal('all'), t.Literal('deficient')])),
       countPerBucket: t.Optional(t.Numeric({ minimum: 1 }))
     }),
@@ -889,6 +922,9 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       type: ReadingPassageTypeSchema,
       model: t.Optional(
         t.String({ description: 'OpenRouter model id. Bỏ trống → random trong pool `readingEnabled`.' })
+      ),
+      forBeginner: t.Optional(
+        t.Boolean({ description: 'true = dùng prompt beginner (chỉ cefrLevel A1–B1, type daily; sai trả 400).' })
       )
     }),
     detail: {
@@ -929,7 +965,8 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
           {
             cefrLevels: t.Optional(t.Array(EngLevelSchema)),
             topicIds: t.Optional(t.Array(t.Integer())),
-            types: t.Optional(t.Array(ReadingPassageTypeSchema))
+            types: t.Optional(t.Array(ReadingPassageTypeSchema)),
+            audience: t.Optional(BucketAudienceSchema)
           },
           { description: 'Thu hẹp không gian bucket. Chiều nào bỏ trống thì không lọc theo chiều đó.' }
         )
@@ -981,13 +1018,19 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       paragraphs: t.Optional(
         t.Array(t.String(), { description: 'Replace toàn bộ danh sách đoạn. Tối thiểu 2 đoạn không rỗng.' })
       ),
-      isActive: t.Optional(t.Boolean({ description: 'false = tắt bài, không tính vào bucket count nữa.' }))
+      isActive: t.Optional(t.Boolean({ description: 'false = tắt bài, không tính vào bucket count nữa.' })),
+      forBeginner: t.Optional(
+        t.Boolean({
+          description:
+            'true = đánh dấu bài dành cho beginner (chỉ bài A1–B1, type daily). Cờ của câu hỏi thuộc bài đổi theo.'
+        })
+      )
     }),
     detail: {
       tags: ['Admin / Readings'],
       summary: 'Update reading passage',
       description:
-        `Partial update (title/paragraphs/isActive). Sửa \`paragraphs\` sẽ tự tính lại \`wordCount\` — ` +
+        `Partial update (title/paragraphs/isActive/forBeginner). Sửa \`paragraphs\` sẽ tự tính lại \`wordCount\` — ` +
         `2 giá trị này không bao giờ lệch nhau. ${ADMIN_AUTH_DESCRIPTION}`,
       security: [{ bearerAuth: [] }]
     },
@@ -1026,6 +1069,7 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       quizType: t.Optional(t.String({ description: 'detail / inference / vocabulary_context / ...' })),
       model: t.Optional(t.String()),
       isActive: t.Optional(t.BooleanString()),
+      forBeginner: t.Optional(t.BooleanString({ description: 'true = chỉ câu của bài beginner.' })),
       createdFrom: t.Optional(t.String({ format: 'date-time' })),
       createdTo: t.Optional(t.String({ format: 'date-time' })),
       q: t.Optional(t.String({ maxLength: 100, description: 'ILIKE trên question, options, explanation, model.' })),
@@ -1096,6 +1140,9 @@ export const adminRoute = new Elysia({ prefix: '/admin' })
       passageId: t.Integer({ description: 'Bài đọc nguồn. Phải đang tồn tại và có topicName.' }),
       model: t.Optional(
         t.String({ description: 'OpenRouter model id. Bỏ trống → random trong pool `readingEnabled`.' })
+      ),
+      forBeginner: t.Optional(
+        t.Boolean({ description: 'true = dùng prompt beginner (chỉ cefrLevel A1–B1, type daily; sai trả 400).' })
       )
     }),
     detail: {

@@ -231,7 +231,8 @@ type UpdateModelInput = Partial<
 async function updateModel(id: number, input: UpdateModelInput): Promise<AiModel> {
   // Provider jsonb đi qua cùng rule validate với context reading (undefined = không đổi).
   const data: UpdateModelInput = { ...input };
-  if (input.scheduleProvider !== undefined) data.scheduleProvider = normalizeProviderPreferencesJson(input.scheduleProvider);
+  if (input.scheduleProvider !== undefined)
+    data.scheduleProvider = normalizeProviderPreferencesJson(input.scheduleProvider);
   if (input.manualProvider !== undefined) data.manualProvider = normalizeProviderPreferencesJson(input.manualProvider);
   // Đổi modelId → giá cũ không còn đúng, nạp lại snapshot của model mới.
   const pricing = data.modelId ? await fetchPricingSnapshot(data.modelId) : null;

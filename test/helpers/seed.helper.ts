@@ -10,10 +10,14 @@ import { QUESTION_FIXTURE_BY_TYPE, type FixtureQuizType } from '../fixtures/pool
  * với đường đang được kiểm tra.
  */
 
-export async function createTopic(name: string, description?: string): Promise<EnglishTopic> {
+export async function createTopic(
+  name: string,
+  description?: string,
+  options: { forBeginner?: boolean } = {}
+): Promise<EnglishTopic> {
   const [row] = await db
     .insert(englishTopic)
-    .values({ name, displayName: name, description: description ?? null })
+    .values({ name, displayName: name, description: description ?? null, forBeginner: options.forBeginner ?? false })
     .returning();
   if (!row) throw new Error(`[test/seed] Không tạo được topic ${name}`);
   return row;
@@ -28,6 +32,7 @@ export interface SeedPoolQuestionInput {
   tokenIn?: number;
   tokenOut?: number;
   sourceQuestionId?: number | null;
+  forBeginner?: boolean;
   /** Ghi đè field trong questionData (vd đổi `word` để phân biệt các câu). */
   dataOverrides?: Record<string, unknown>;
   createdAt?: Date;
@@ -50,6 +55,7 @@ export async function seedPoolQuestion(input: SeedPoolQuestionInput = {}): Promi
       tokenOut: input.tokenOut ?? 50,
       topicId: input.topicId ?? null,
       sourceQuestionId: input.sourceQuestionId ?? null,
+      forBeginner: input.forBeginner ?? false,
       ...(input.createdAt ? { createdAt: input.createdAt } : {})
     })
     .returning({ id: englishQuestionPool.id });
@@ -123,6 +129,7 @@ export interface SeedPassageInput {
   isActive?: boolean;
   questionGenAttempts?: number;
   paragraphs?: string[];
+  forBeginner?: boolean;
 }
 
 export async function seedPassage(input: SeedPassageInput = {}): Promise<number> {
@@ -142,6 +149,7 @@ export async function seedPassage(input: SeedPassageInput = {}): Promise<number>
       topicId: input.topicId ?? null,
       topicName: input.topicName ?? null,
       type: input.type ?? 'daily',
+      forBeginner: input.forBeginner ?? false,
       model: input.model ?? 'test/model',
       tokenIn: 500,
       tokenOut: 200,
@@ -164,6 +172,7 @@ export interface SeedReadingQuestionInput {
   topicId?: number | null;
   type?: 'daily' | 'academic';
   isActive?: boolean;
+  forBeginner?: boolean;
 }
 
 export async function seedReadingQuestion(input: SeedReadingQuestionInput): Promise<number> {
@@ -188,6 +197,7 @@ export async function seedReadingQuestion(input: SeedReadingQuestionInput): Prom
       topicId: input.topicId ?? null,
       topicName: null,
       type: input.type ?? 'daily',
+      forBeginner: input.forBeginner ?? false,
       model: 'test/model',
       tokenIn: 100,
       tokenOut: 50,
@@ -208,7 +218,8 @@ export async function seedReadyPassage(input: SeedPassageInput & { questionCount
       passageRefId: passageId,
       cefrLevel: input.cefrLevel ?? 'A1',
       topicId: input.topicId ?? null,
-      type: input.type ?? 'daily'
+      type: input.type ?? 'daily',
+      forBeginner: input.forBeginner ?? false
     });
   }
   return passageId;

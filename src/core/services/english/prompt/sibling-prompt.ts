@@ -1,6 +1,6 @@
 import type { SiblingQuizType } from '../questionTypes';
 import type { DifficultyContext } from './vocab-prompt';
-import { LEVEL_NOTE } from './review-prompt';
+import { describeLearnerLevel } from './review-prompt';
 
 export type SiblingContext = DifficultyContext & { topicName?: string | null };
 
@@ -92,7 +92,7 @@ Bám hướng admin nêu nhưng vẫn tuân thủ mọi ràng buộc KHÓA / Đ�
 
   return `You generate ALTERNATE VERSIONS ("siblings") of an existing English quiz question. Each sibling tests the EXACT SAME target item, at the SAME CEFR level and the SAME topic, but with a fresh context, fresh distractors, fresh example and fresh explanation. You are NOT reviewing or fixing the source — you are re-dressing it.
 
-LEARNER LEVEL: ${ctx.engLevel} (CEFR) — ${LEVEL_NOTE[ctx.engLevel]}
+LEARNER LEVEL: ${ctx.engLevel} (CEFR) — ${describeLearnerLevel(ctx)}
 Keep the difficulty of every sibling at exactly this level — do not make it harder or easier than the source. A clean, simple item at this level is correct as-is.
 TOPIC (hard lock): "${ctx.topicName ?? 'no specific topic'}" — the central tested item and any context sentence must fit this topic. Distractors are exempt.
 

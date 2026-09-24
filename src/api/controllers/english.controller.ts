@@ -17,6 +17,7 @@ import studyService, {
   type StructuredOutputUsage
 } from '@/core/services/english/study.service';
 import questionPoolService, {
+  getBeginnerQuizTypes,
   pickQuizType,
   type ListPoolQuestionsInput
 } from '@/core/services/english/questionPool.service';
@@ -33,11 +34,42 @@ import {
   type EnglishConfigChange
 } from '@/core/services/english/englishConfig.service';
 import {
+  BEGINNER_ENG_LEVELS,
+  BEGINNER_MAX_OPTION_COUNT,
+  BEGINNER_READING_PASSAGE_TYPE,
   QUIZ_TYPES,
+  isBeginnerLevel,
   type EngLevel,
   type QuizType,
   type ReadingPassageType
 } from '@/core/services/english/questionTypes';
+
+// ─── Beginner guards ──────────────────────────────────────────────────────────
+
+function assertBeginnerLevel(engLevel: string | undefined): void {
+  if (engLevel !== undefined && !isBeginnerLevel(engLevel)) {
+    throw new BusinessLogicException(
+      `Nội dung beginner chỉ có level ${BEGINNER_ENG_LEVELS.join(', ')} (nhận ${engLevel})`
+    );
+  }
+}
+
+function assertBeginnerQuizType(quizType: QuizType): void {
+  if (!getBeginnerQuizTypes().includes(quizType)) {
+    throw new BusinessLogicException(`Loại câu "${quizType}" chưa được bật cho beginner`);
+  }
+}
+
+/**
+ * Allow-list quizType dùng khi pop: tenant allow-list, và với beginner giao thêm với các loại
+ * đang bật cho beginner. null = không giới hạn.
+ */
+function resolveAllowedQuizTypes(tenant: TenantContext, forBeginner: boolean): readonly string[] | null {
+  const tenantAllowed = tenant.allowAllQuizTypes ? null : tenant.allowedQuizTypes;
+  if (!forBeginner) return tenantAllowed;
+  const beginnerTypes = getBeginnerQuizTypes();
+  return tenantAllowed === null ? beginnerTypes : beginnerTypes.filter((type) => tenantAllowed.includes(type));
+}
 
 // ─── Generation ───────────────────────────────────────────────────────────────
 
@@ -47,6 +79,7 @@ interface GenerateInput {
   topic?: string;
   model?: string;
   excludeWords?: string[];
+  forBeginner?: boolean;
 }
 
 // generateByType() switch-narrows quizType↔question nội bộ nhưng type đó không thoát ra
@@ -71,13 +104,17 @@ type GenerateResult =
 
 async function generate(tenant: TenantContext, quizType: QuizType, input: GenerateInput): Promise<GenerateResult> {
   assertQuizTypeAllowed(tenant, quizType);
+  if (input.forBeginner) assertBeginnerQuizType(quizType);
   const ctx = await studyService.buildContext({
     engLevel: input.engLevel,
     optionCount: input.optionCount,
     topicName: input.topic ?? null,
-    model: input.model
+    model: input.model,
+    forBeginner: input.forBeginner
   });
-  logger.info(`[API] Generate ${quizType} engLevel=${ctx.engLevel} optionCount=${ctx.optionCount}`);
+  logger.info(
+    `[API] Generate ${quizType} engLevel=${ctx.engLevel} optionCount=${ctx.optionCount} forBeginner=${ctx.forBeginner}`
+  );
   const result = await studyService.generateByType(quizType, ctx, input.excludeWords);
   return { quizType, ...result } as GenerateResult;
 }
@@ -115,19 +152,33 @@ export function parseExcludeIds(raw: string | undefined): number[] {
   return [...new Set(ids)].slice(0, MAX_EXCLUDE_IDS);
 }
 
-async function popFromPool(tenant: TenantContext, engLevel: EngLevel, topicId: number | null, excludeIds: number[]) {
+async function popFromPool(
+  tenant: TenantContext,
+  engLevel: EngLevel,
+  topicId: number | null,
+  excludeIds: number[],
+  forBeginner = false
+) {
   assertTopicAllowed(tenant, topicId);
-  const allowedQuizTypes = tenant.allowAllQuizTypes ? null : tenant.allowedQuizTypes;
-  const question = await questionPoolService.popQuestion(engLevel, topicId, excludeIds, allowedQuizTypes);
+  if (forBeginner) assertBeginnerLevel(engLevel);
+  const allowedQuizTypes = resolveAllowedQuizTypes(tenant, forBeginner);
+  const question = await questionPoolService.popQuestion(engLevel, topicId, excludeIds, allowedQuizTypes, forBeginner);
   if (!question) throw new NotFoundException('Pool trống cho bucket này');
   return question;
 }
 
-async function countPool(tenant: TenantContext, engLevel: EngLevel, quizType: QuizType, topicId: number | null) {
+async function countPool(
+  tenant: TenantContext,
+  engLevel: EngLevel,
+  quizType: QuizType,
+  topicId: number | null,
+  forBeginner = false
+) {
   assertTopicAllowed(tenant, topicId);
   assertQuizTypeAllowed(tenant, quizType);
-  const count = await questionPoolService.getPoolCount(engLevel, quizType, topicId);
-  return { engLevel, quizType, topicId, count };
+  if (forBeginner) assertBeginnerLevel(engLevel);
+  const count = await questionPoolService.getPoolCount(engLevel, quizType, topicId, forBeginner);
+  return { engLevel, quizType, topicId, forBeginner, count };
 }
 
 async function listPoolQuestions(tenant: TenantContext, input: ListPoolQuestionsInput) {
@@ -149,30 +200,42 @@ interface FillPoolInput {
   optionCount: 4 | 5;
   topicId?: number | null;
   topicName?: string | null;
+  forBeginner?: boolean;
 }
 
 async function fillPool(tenant: TenantContext, input: FillPoolInput) {
   const topicId = input.topicId ?? null;
   assertTopicAllowed(tenant, topicId);
   assertQuizTypeAllowed(tenant, input.quizType);
+  const forBeginner = input.forBeginner ?? false;
+  if (forBeginner) {
+    assertBeginnerLevel(input.engLevel);
+    assertBeginnerQuizType(input.quizType);
+    if (input.optionCount > BEGINNER_MAX_OPTION_COUNT) {
+      throw new BusinessLogicException(`Câu beginner tối đa ${BEGINNER_MAX_OPTION_COUNT} đáp án`);
+    }
+  }
   await questionPoolTriggerService.ensurePoolFilled(
     input.engLevel,
     topicId,
     input.topicName ?? null,
     input.quizType,
-    input.optionCount
+    input.optionCount,
+    forBeginner
   );
   return { enqueued: true };
 }
 
-function pickPoolQuizType() {
-  return { quizType: pickQuizType() };
+function pickPoolQuizType(forBeginner = false) {
+  return { quizType: pickQuizType({ forBeginner }) };
 }
 
 // ─── Meta ─────────────────────────────────────────────────────────────────────
 
-function listQuizTypes() {
-  return QUIZ_TYPES;
+function listQuizTypes(forBeginner = false) {
+  if (!forBeginner) return QUIZ_TYPES;
+  const beginnerTypes = new Set<string>(getBeginnerQuizTypes());
+  return QUIZ_TYPES.filter((quizType) => beginnerTypes.has(quizType));
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -199,21 +262,33 @@ function resetConfig(recordKey: string) {
 
 // ─── Topics ───────────────────────────────────────────────────────────────────
 
-async function listTopics(tenant: TenantContext) {
-  const topics = await topicService.getAllActiveTopics();
+async function listTopics(tenant: TenantContext, forBeginner = false) {
+  const topics = forBeginner ? await topicService.getActiveBeginnerTopics() : await topicService.getAllActiveTopics();
   if (tenant.allowAllTopics) return topics;
   return topics.filter((t) => tenant.allowedTopicIds.includes(t.id));
 }
 
-async function randomTopicPairs(tenant: TenantContext, pairCount: number) {
-  if (tenant.allowAllTopics) return topicService.getRandomTopicPairs(pairCount, []);
-  const topics = await topicService.getAllActiveTopics();
-  const allowed = topics.filter((t) => tenant.allowedTopicIds.includes(t.id));
+async function randomTopicPairs(tenant: TenantContext, pairCount: number, forBeginner = false) {
+  if (tenant.allowAllTopics && !forBeginner) return topicService.getRandomTopicPairs(pairCount, []);
+  const allowed = await listTopics(tenant, forBeginner);
   return topicService.getRandomTopicPairsFromPool(allowed, pairCount);
 }
 
-function createTopic(name: string, description?: string) {
-  return topicService.createTopic(name, description);
+function createTopic(name: string, description?: string, forBeginner?: boolean) {
+  return topicService.createTopic(name, description, forBeginner ?? false);
+}
+
+interface UpdateTopicInput {
+  displayName?: string | null;
+  description?: string | null;
+  isActive?: boolean;
+  forBeginner?: boolean;
+}
+
+function updateTopic(id: number, input: UpdateTopicInput) {
+  if (Object.keys(input).length === 0) throw new BusinessLogicException('Không có field nào để cập nhật');
+  logger.info(`[API] Update topic id=${id} fields=${Object.keys(input).join(',')}`);
+  return topicService.updateTopic(id, input);
 }
 
 // ─── Cron tracking ──────────────────────────────────────────────────────────────
@@ -257,17 +332,38 @@ function resolveAllowedTopicIds(tenant: TenantContext): number[] | null {
   return tenant.allowAllTopics ? null : tenant.allowedTopicIds;
 }
 
+/** Beginner chỉ đọc bài 'daily', level ≤ B1. Trả type đã chốt. */
+function resolveReadingType(input: {
+  cefrLevel?: EngLevel;
+  type?: ReadingPassageType;
+  forBeginner: boolean;
+}): ReadingPassageType {
+  if (!input.forBeginner) return input.type ?? 'daily';
+  assertBeginnerLevel(input.cefrLevel);
+  if (input.type !== undefined && input.type !== BEGINNER_READING_PASSAGE_TYPE) {
+    throw new BusinessLogicException(`Bài đọc beginner chỉ có type "${BEGINNER_READING_PASSAGE_TYPE}"`);
+  }
+  return BEGINNER_READING_PASSAGE_TYPE;
+}
+
 async function popReading(
   tenant: TenantContext,
-  input: { cefrLevel?: EngLevel; topicId?: number; type?: ReadingPassageType; excludeIds: number[] }
+  input: {
+    cefrLevel?: EngLevel;
+    topicId?: number;
+    type?: ReadingPassageType;
+    excludeIds: number[];
+    forBeginner?: boolean;
+  }
 ) {
   if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
 
   const allowedTopicIds = resolveAllowedTopicIds(tenant);
-  // type là hard filter: giữ nguyên xuyên suốt mọi tầng fallback bên dưới, không như
-  // topicId/cefrLevel/excludeIds — không bao giờ trả nhầm content style (daily vs academic).
-  const type = input.type ?? 'daily';
-  const base = { excludeIds: input.excludeIds, allowedTopicIds, type };
+  const forBeginner = input.forBeginner ?? false;
+  // type + forBeginner là hard filter: giữ nguyên xuyên suốt mọi tầng fallback bên dưới, không
+  // như topicId/cefrLevel/excludeIds — không bao giờ trả nhầm content style hay nhầm đối tượng.
+  const type = resolveReadingType({ cefrLevel: input.cefrLevel, type: input.type, forBeginner });
+  const base = { excludeIds: input.excludeIds, allowedTopicIds, type, forBeginner };
 
   let result = await readingQuestionService.popPassageWithQuestions({
     ...base,
@@ -295,7 +391,7 @@ async function popReading(
     logger.warn(
       `[popReading] Vẫn không có bài sau khi nới topic/level (excludeIds=${input.excludeIds.length} id), fallback bỏ excludeIds`
     );
-    result = await readingQuestionService.popPassageWithQuestions({ allowedTopicIds, type });
+    result = await readingQuestionService.popPassageWithQuestions({ allowedTopicIds, type, forBeginner });
   }
 
   if (!result) throw new NotFoundException('Không có bài đọc nào đã sẵn sàng (đủ câu hỏi)');
@@ -304,18 +400,20 @@ async function popReading(
 
 async function countReadings(
   tenant: TenantContext,
-  input: { cefrLevel?: EngLevel; topicId?: number; type?: ReadingPassageType }
+  input: { cefrLevel?: EngLevel; topicId?: number; type?: ReadingPassageType; forBeginner?: boolean }
 ) {
   if (input.topicId !== undefined) assertTopicAllowed(tenant, input.topicId);
 
-  const type = input.type ?? 'daily';
+  const forBeginner = input.forBeginner ?? false;
+  const type = resolveReadingType({ cefrLevel: input.cefrLevel, type: input.type, forBeginner });
   const count = await readingQuestionService.countReadyPassages({
     cefrLevel: input.cefrLevel,
     topicId: input.topicId,
     type,
+    forBeginner,
     allowedTopicIds: resolveAllowedTopicIds(tenant)
   });
-  return { cefrLevel: input.cefrLevel ?? null, topicId: input.topicId ?? null, type, count };
+  return { cefrLevel: input.cefrLevel ?? null, topicId: input.topicId ?? null, type, forBeginner, count };
 }
 
 export default {
@@ -339,6 +437,7 @@ export default {
   listTopics,
   randomTopicPairs,
   createTopic,
+  updateTopic,
   listCronRuns,
   getCronRun,
   getCronUsage

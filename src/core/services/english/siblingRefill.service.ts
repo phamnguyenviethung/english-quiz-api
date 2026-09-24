@@ -62,7 +62,10 @@ export async function processSiblingBucket(
     topicName: candidate.topicName,
     requestedCount,
     bucketKey: bucketKeyOf(candidate),
-    metadata: { source: opts.context === 'schedule' ? 'sibling_gen' : 'sibling_manual' }
+    metadata: {
+      source: opts.context === 'schedule' ? 'sibling_gen' : 'sibling_manual',
+      ...(candidate.forBeginner ? { forBeginner: true } : {})
+    }
   });
   const startedAt = new Date();
 
@@ -71,7 +74,8 @@ export async function processSiblingBucket(
       candidate.engLevel,
       candidate.quizType,
       candidate.topicId,
-      sourceLimit
+      sourceLimit,
+      candidate.forBeginner
     );
 
     let generated = 0;
@@ -256,7 +260,7 @@ async function executeManualSiblingPlanInProcess(
     );
 
     const tasks = planned.map((item) => async () => {
-      const lockKey = `question-pool:lock:${item.engLevel}:${item.topicId ?? 'null'}:${item.quizType}`;
+      const lockKey = `question-pool:lock:${bucketKeyOf(item)}`;
       const locked = await redisClient.set(lockKey, '1', 'EX', 300, 'NX');
       if (locked !== 'OK') {
         logger.info(`[${LOG_TAG}] Bucket locked, skip ${lockKey}`);

@@ -33,6 +33,23 @@ describe('buildOnDemandRefillJob', () => {
     const job = buildOnDemandRefillJob(input, 3);
 
     expect(job.name).toBe('refill');
-    expect(job.data).toEqual({ engLevel: 'A2', quizType: 'vocab', optionCount: 4, topicId: 5, topicName: 'Food', count: 3 });
+    expect(job.data).toEqual({
+      engLevel: 'A2',
+      quizType: 'vocab',
+      optionCount: 4,
+      topicId: 5,
+      topicName: 'Food',
+      forBeginner: false,
+      count: 3
+    });
+  });
+
+  it('bucket beginner chống trùng riêng, không chặn nhầm refill của bucket thường cùng tổ hợp', () => {
+    const beginnerJob = buildOnDemandRefillJob({ ...input, forBeginner: true }, 3);
+    const standardJob = buildOnDemandRefillJob(input, 3);
+
+    expect(beginnerJob.opts.deduplication).toEqual({ id: 'refill_A2_5_vocab_beginner' });
+    expect(beginnerJob.opts.deduplication.id).not.toBe(standardJob.opts.deduplication.id);
+    expect(beginnerJob.data.forBeginner).toBe(true);
   });
 });

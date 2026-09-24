@@ -41,13 +41,15 @@ Pool được phân theo **3 chiều**: **`(engLevel, topicId, quizType)`**.
 
 **`topicId = null`**: vẫn hợp lệ trong schema (nullable). Điều kiện SQL dùng `topicId IS NULL` cho bucket "không topic".
 
+**Bucket beginner**: cột `forBeginner` là chiều thứ 4 của bucket — câu beginner (≤ B1, 4 đáp án, sinh bằng prompt beginner) nằm ở bucket riêng, key `${engLevel}:${topicId}:${quizType}:beginner` (luôn qua `bucketKeyOf()`), đếm/pop/refill tách hẳn khỏi câu thường. `getPoolCount(..., forBeginner = false)`, `popQuestion(..., forBeginner = false)`. Chi tiết: [`beginner.md`](./beginner.md).
+
 ---
 
 ## popQuestion — random thuần
 
-`popQuestion(engLevel, topicId, excludeIds, allowedQuizTypes)`:
+`popQuestion(engLevel, topicId, excludeIds, allowedQuizTypes, forBeginner = false)`:
 
-1. `SELECT * FROM english_question_pool WHERE engLevel = ? AND (topicId = ? | topicId IS NULL) [AND id NOT IN (...)] [AND quizType IN (<allow-list của tenant>)] ORDER BY RANDOM() LIMIT 1`.
+1. `SELECT * FROM english_question_pool WHERE engLevel = ? AND (topicId = ? | topicId IS NULL) AND forBeginner = ? [AND id NOT IN (...)] [AND quizType IN (<allow-list của tenant>)] ORDER BY RANDOM() LIMIT 1`.
 2. Có row → trả về `PoolQuestion`. **Không** `UPDATE`, **không** `DELETE` — câu vẫn nằm trong pool và có thể được trả lại ở lần pop sau. Pool là **kho câu hỏi dùng lại được**.
 3. Không có row nào khớp → trả `null`.
 
